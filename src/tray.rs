@@ -1,32 +1,26 @@
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-use crate::app::Layout;
+use crate::i18n::Text;
 
-/// Owns the tray icon and translates menu clicks into app actions.
+/// Owns the tray icon. Menu clicks arrive through the global `muda` event
+/// channel and are dispatched by the app, same as the window context menu.
 pub struct Tray {
     _icon: TrayIcon,
     autostart_item: CheckMenuItem,
 }
 
-pub enum TrayAction {
-    ToggleVisible,
-    SetLayout(Layout),
-    SetAutostart(bool),
-    Quit,
-}
-
 impl Tray {
-    pub fn new(autostart_checked: bool) -> Option<Self> {
+    pub fn new(autostart_checked: bool, t: &Text) -> Option<Self> {
         let menu = Menu::new();
 
-        let toggle = MenuItem::with_id("toggle", "显示 / 隐藏", true, None);
-        let vertical = MenuItem::with_id("layout_v", "竖排", true, None);
-        let horizontal = MenuItem::with_id("layout_h", "横排", true, None);
-        let layout_menu = Submenu::new("布局", true);
+        let toggle = MenuItem::with_id("toggle", t.tray_toggle, true, None);
+        let vertical = MenuItem::with_id("layout_v", t.vertical, true, None);
+        let horizontal = MenuItem::with_id("layout_h", t.horizontal, true, None);
+        let layout_menu = Submenu::new(t.layout, true);
         let autostart_item =
-            CheckMenuItem::with_id("autostart", "开机自启", true, autostart_checked, None);
-        let quit = MenuItem::with_id("quit", "退出", true, None);
+            CheckMenuItem::with_id("autostart", t.autostart, true, autostart_checked, None);
+        let quit = MenuItem::with_id("quit", t.quit, true, None);
 
         menu.append(&toggle).ok()?;
         menu.append(&PredefinedMenuItem::separator()).ok()?;
@@ -49,25 +43,6 @@ impl Tray {
             _icon: tray,
             autostart_item,
         })
-    }
-
-    /// Drain pending menu events. Requires the caller's thread to be pumping
-    /// the Win32 message queue, which eframe's event loop does.
-    pub fn poll(&self) -> Vec<TrayAction> {
-        let mut actions = Vec::new();
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            match event.id.0.as_str() {
-                "toggle" => actions.push(TrayAction::ToggleVisible),
-                "layout_v" => actions.push(TrayAction::SetLayout(Layout::Vertical)),
-                "layout_h" => actions.push(TrayAction::SetLayout(Layout::Horizontal)),
-                "autostart" => {
-                    actions.push(TrayAction::SetAutostart(self.autostart_item.is_checked()))
-                }
-                "quit" => actions.push(TrayAction::Quit),
-                _ => {}
-            }
-        }
-        actions
     }
 
     pub fn set_autostart_checked(&self, checked: bool) {

@@ -1,14 +1,18 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::app::Layout;
+use crate::app::{Layout, Spacing};
+use crate::i18n::Language;
 
 /// User settings persisted to `%APPDATA%\deskpulse\config.toml`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub layout: Layout,
+    /// Cell spacing preset.
+    pub spacing: Spacing,
     /// Top-left window position in physical pixels, if it has been moved yet.
     pub position: Option<[f32; 2]>,
     /// Refresh interval for the metric sampler, in seconds.
@@ -18,17 +22,24 @@ pub struct Config {
     pub autostart: bool,
     /// Port of LibreHardwareMonitor's HTTP server (used for CPU temperature).
     pub lhm_port: u16,
+    /// `None` until resolved, so the system language can be detected on first run.
+    pub language: Option<Language>,
+    /// Per-metric visibility, keyed by `Metric::id`. Missing keys are visible.
+    pub visible: BTreeMap<String, bool>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             layout: Layout::Vertical,
+            spacing: Spacing::Tight,
             position: None,
             refresh_secs: 1,
             opacity: 0.72,
             autostart: false,
             lhm_port: 8085,
+            language: None,
+            visible: BTreeMap::new(),
         }
     }
 }
@@ -46,23 +57,29 @@ impl Config {
     }
 
     pub fn load() -> Self {
-        if let Some(path) = Self::path()
-            && let Ok(text) = std::fs::read_to_string(path)
-            && let Ok(config) = toml::from_str::<Self>(&text)
-        {
-            return config;
+        let (mut config, migrated) = match Self::read(Self::path()) {
+            Some(config) => (config, false),
+            // First run under the new name: adopt the pre-rename config.
+            None => match Self::read(Self::legacy_path()) {
+                Some(config) => (config, true),
+                None => (Self::default(), false),
+            },
+        };
+
+        if config.language.is_none() {
+            config.language = Some(Language::system_default());
         }
 
-        // First run under the new name: adopt the pre-rename config if present.
-        if let Some(legacy) = Self::legacy_path()
-            && let Ok(text) = std::fs::read_to_string(legacy)
-            && let Ok(config) = toml::from_str::<Self>(&text)
-        {
+        if migrated {
             config.save();
-            return config;
         }
+        config
+    }
 
-        Self::default()
+    fn read(path: Option<PathBuf>) -> Option<Self> {
+        let path = path?;
+        let text = std::fs::read_to_string(path).ok()?;
+        toml::from_str(&text).ok()
     }
 
     pub fn save(&self) {
@@ -85,13 +102,18 @@ mod tests {
 
     #[test]
     fn round_trips_all_fields() {
+        let mut visible = BTreeMap::new();
+        visible.insert("gpu".to_owned(), false);
         let config = Config {
             layout: Layout::Horizontal,
+            spacing: Spacing::Loose,
             position: Some([12.0, 34.0]),
             refresh_secs: 2,
             opacity: 0.5,
             autostart: true,
             lhm_port: 8085,
+            language: Some(Language::En),
+            visible: visible.clone(),
         };
         let text = toml::to_string_pretty(&config).unwrap();
         let back: Config = toml::from_str(&text).unwrap();
@@ -99,6 +121,8 @@ mod tests {
         assert_eq!(back.position, Some([12.0, 34.0]));
         assert_eq!(back.refresh_secs, 2);
         assert!(back.autostart);
+        assert_eq!(back.language, Some(Language::En));
+        assert_eq!(back.visible, visible);
     }
 
     #[test]
@@ -107,6 +131,8 @@ mod tests {
         assert_eq!(back.layout, Layout::Horizontal);
         assert_eq!(back.refresh_secs, 1);
         assert!(back.position.is_none());
+        assert!(back.language.is_none());
+        assert!(back.visible.is_empty());
     }
 }
 
