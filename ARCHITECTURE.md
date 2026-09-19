@@ -1,150 +1,150 @@
-# deskpulse 技术栈与架构
+# deskpulse — Tech Stack and Architecture
 
-[English](ARCHITECTURE.en.md) | 中文
+English | [中文](ARCHITECTURE.zh.md)
 
-本文档记录当前实现的技术选型、架构与关键取舍。功能和使用说明见 [README.md](README.md)。
+This document records the current tech choices, architecture and key trade-offs. For features and usage see [README.md](README.md).
 
-## 1. 技术栈
+## 1. Tech stack
 
-| 方面 | 选择 | 说明 |
+| Area | Choice | Notes |
 | --- | --- | --- |
-| 语言 | Rust，edition 2024 | 只做 Windows（`x86_64-pc-windows-msvc`） |
-| GUI | `eframe` / `egui` `0.36`（glow 后端） | 立即模式 GUI；无边框、透明、置顶窗口 |
-| 网络 / CPU / 内存 | `sysinfo` `0.39` | 网卡累计字节、CPU 占用、内存 |
-| GPU | `nvml-wrapper` `0.13` | NVIDIA NVML：占用 / 显存 / 温度（运行时动态加载 `nvml.dll`） |
-| CPU 温度（主） | PawnIO 内核驱动 + 手写 FFI | 无第三方 Rust 封装，直接用 `CreateFile` / `DeviceIoControl` |
-| CPU 温度（退路） | `serde_json` + 标准库 `TcpStream` | 轮询 LibreHardwareMonitor 的 `http://127.0.0.1:8085/data.json` |
-| 托盘 / 菜单 | `tray-icon` `0.25`（内部用 muda） | 托盘图标与原生菜单 |
-| 配置 | `serde` + `toml` | `%APPDATA%\deskpulse\config.toml` |
-| 开机自启 | `schtasks.exe` | 计划任务，`RunLevel Highest` |
-| 打包 | `winresource`、`+crt-static`、LTO | 图标/版本信息、免 VC++ 运行时、单文件 exe |
-| 中文显示 | 运行时加载系统字体 | egui 不自带 CJK 字形 |
+| Language | Rust, edition 2024 | Windows only (`x86_64-pc-windows-msvc`) |
+| GUI | `eframe` / `egui` `0.36` (glow backend) | Immediate-mode GUI; borderless, transparent, always-on-top window |
+| Network / CPU / memory | `sysinfo` `0.39` | Interface byte counters, CPU usage, memory |
+| GPU | `nvml-wrapper` `0.13` | NVIDIA NVML: usage / VRAM / temperature (loads `nvml.dll` at runtime) |
+| CPU temperature (primary) | PawnIO kernel driver + hand-written FFI | No third-party Rust wrapper; uses `CreateFile` / `DeviceIoControl` directly |
+| CPU temperature (fallback) | `serde_json` + std `TcpStream` | Polls LibreHardwareMonitor's `http://127.0.0.1:8085/data.json` |
+| Tray / menus | `tray-icon` `0.25` (uses muda) | Tray icon and native menus |
+| Config | `serde` + `toml` | `%APPDATA%\deskpulse\config.toml` |
+| Autostart | `schtasks.exe` | Scheduled task, `RunLevel Highest` |
+| Packaging | `winresource`, `+crt-static`, LTO | Icon/version info, no VC++ runtime, single-file exe |
+| Chinese text | system font loaded at runtime | egui ships no CJK glyphs |
 
-设计原则：尽量少依赖；可能拿不到的指标一律用 `Option`，UI 显示 `--`，**绝不用 `0` 冒充未知**。
+Design principles: minimise dependencies; every metric that may be unavailable is an `Option` rendered as `--`, and **`0` is never used as a stand-in for unknown**.
 
-## 2. 架构
+## 2. Architecture
 
-### 2.1 线程模型
-
-```
-主线程 (eframe/winit 事件循环)
-├── 根视口：悬浮窗（数据展示）
-├── 延迟视口：右键设置菜单（独立小窗口）
-└── App::logic 每帧：回收菜单动作、处理托盘事件、请求重绘
-
-采集线程 (1 个)
-└── 周期性采样 → 写入 Arc<Mutex<Snapshot>>
-
-菜单事件线程 (1 个)
-└── 阻塞在 MenuEvent::recv()，收到即入队并 ctx.request_repaint()
-```
-
-- **采集与 UI 解耦**：系统调用只在采集线程里做；UI 每帧只读取一份快照，避免每帧查询。
-- **菜单事件即时唤醒**：托盘菜单事件若只在 `logic` 里轮询，最多要等一个重绘周期（~400ms）；监听线程用 `request_repaint()` 立刻唤醒，退出/切换操作即时生效。
-
-### 2.2 数据流
+### 2.1 Threading model
 
 ```
-各 Collector ──sample()──► Snapshot ──(Arc<Mutex>)──► App::ui 每帧 clone 渲染
+main thread (eframe/winit event loop)
+├── root viewport: the overlay (metric display)
+├── deferred viewport: right-click settings menu (its own small window)
+└── App::logic every frame: drain menu actions, handle tray events, request repaint
+
+collector thread (1)
+└── periodic sampling → writes Arc<Mutex<Snapshot>>
+
+menu-event thread (1)
+└── blocks on MenuEvent::recv(); on event, enqueue + ctx.request_repaint()
 ```
 
-`Snapshot` 汇总 8 个指标，每个都是 `Option`（拿不到即 `None`）。百分比、显存占比等在 UI 侧由原始值计算。
+- **Collection is decoupled from the UI**: system calls happen only on the collector thread; the UI reads one snapshot per frame instead of querying every frame.
+- **Menu events wake the UI immediately**: polling tray events only from `logic` would wait up to one repaint period (~400ms); the listener thread calls `request_repaint()` so quit/switch actions take effect instantly.
 
-### 2.3 视口模型
+### 2.2 Data flow
 
-- **根视口**：无边框 + 透明 + 置顶 + 不进任务栏的悬浮窗。每帧测量内容尺寸并用 `ViewportCommand::InnerSize` **贴合内容**，所以没有多余透明区域。
-- **菜单视口**：右键时创建 `show_viewport_deferred` 独立窗口（`decorations=false`、透明、置顶），紧贴菜单内容；主窗口大小不受影响。菜单是一棵二级结构。
+```
+Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► App::ui clones each frame
+```
 
-### 2.4 模块职责
+`Snapshot` holds all 8 metrics, each an `Option` (`None` when unavailable). Percentages and VRAM ratios are computed on the UI side from raw values.
 
-| 模块 | 职责 |
+### 2.3 Viewport model
+
+- **Root viewport**: borderless + transparent + always-on-top + not in the taskbar. Every frame it measures the content and sends `ViewportCommand::InnerSize` to **hug the content**, so there is no wasted transparent area.
+- **Menu viewport**: created on right-click via `show_viewport_deferred` as its own window (`decorations=false`, transparent, always-on-top), tightly fitted; the main window size is unaffected. The menu is a two-level structure.
+
+### 2.4 Module responsibilities
+
+| Module | Responsibility |
 | --- | --- |
-| `main.rs` | 解析 `--dump`；自提权；创建窗口并启动 eframe |
-| `app.rs` | eframe `App`（`logic`/`ui`）；布局渲染；窗口自适应；菜单视口与动作回收 |
-| `config.rs` | `Config` 读写、缺省值、旧目录迁移 |
-| `i18n.rs` | `Language`、文案表、按系统语言选择 |
-| `format.rs` | 速率 / 百分比 / 温度格式化（含进位规则） |
-| `tray.rs` | 托盘图标与菜单，暴露 `set_autostart_checked` |
-| `autostart.rs` | 用 `schtasks` 管理登录计划任务 |
-| `elevate.rs` | `TokenElevation` 检测 + `ShellExecuteW("runas")` 自提权 |
-| `diag.rs` | 带时间戳的诊断日志 |
-| `metrics/mod.rs` | `Snapshot`、采集线程、百分比计算 |
-| `metrics/*.rs` | 各指标采集器（net / cpu / mem / gpu / pawnio / temp） |
+| `main.rs` | Parse `--dump`; self-elevate; create the window and start eframe |
+| `app.rs` | eframe `App` (`logic`/`ui`); layout rendering; window fitting; menu viewport and action draining |
+| `config.rs` | `Config` load/save, defaults, legacy-directory migration |
+| `i18n.rs` | `Language`, string tables, system-language selection |
+| `format.rs` | Speed / percent / temperature formatting (including roll-over rules) |
+| `tray.rs` | Tray icon and menu; exposes `set_autostart_checked` |
+| `autostart.rs` | Manages the logon scheduled task via `schtasks` |
+| `elevate.rs` | `TokenElevation` check + `ShellExecuteW("runas")` self-elevation |
+| `diag.rs` | Timestamped diagnostic log |
+| `metrics/mod.rs` | `Snapshot`, collector thread, percentage helpers |
+| `metrics/*.rs` | Individual collectors (net / cpu / mem / gpu / pawnio / temp) |
 
-## 3. 指标数据源
+## 3. Metric data sources
 
-| 指标 | 采集方式 |
+| Metric | How it is read |
 | --- | --- |
-| 网速 | `sysinfo::Networks` 累计字节做时间差分；过滤 loopback / 虚拟 / VPN 网卡 |
-| CPU 占用 | `sysinfo` `global_cpu_usage()`（复用同一个 `System` 实例） |
-| 内存 | `sysinfo` `used_memory / total_memory` |
-| GPU | NVML：`utilization_rates` / `memory_info` / `temperature` |
-| CPU 温度 | PawnIO 直读优先，LHM HTTP 退路（见下节） |
+| Network speed | `sysinfo::Networks` cumulative bytes, time-differenced; loopback / virtual / VPN interfaces filtered out |
+| CPU usage | `sysinfo` `global_cpu_usage()` (one reused `System` instance) |
+| Memory | `sysinfo` `used_memory / total_memory` |
+| GPU | NVML: `utilization_rates` / `memory_info` / `temperature` |
+| CPU temperature | PawnIO direct first, LHM HTTP fallback (next section) |
 
-## 4. CPU 温度：为什么需要内核驱动
+## 4. CPU temperature: why a kernel driver is required
 
-Windows 没有可靠的公开 CPU 温度 API。核心温度只能读 **MSR**（Intel）/ **SMN**（AMD）寄存器，而 `RDMSR` 是 **ring-0 特权指令**，用户态执行会触发 #GP。因此必须有内核驱动代读。可选路径：
+Windows has no reliable public CPU temperature API. Core temperature can only be read from **MSR** (Intel) / **SMN** (AMD) registers, and `RDMSR` is a **ring-0 privileged instruction** — executing it in user mode raises #GP. A kernel driver must read on our behalf. The options:
 
-| 方案 | 代价 |
+| Option | Cost |
 | --- | --- |
-| **PawnIO 驱动**（当前主路径） | 需要驱动已安装 + 管理员权限；无需任何常驻 app |
-| LibreHardwareMonitor HTTP（退路） | 需要 LHM 常驻 |
-| 自研签名驱动 | EV 证书 + 微软认证，成本高、易被拦截 —— 不采用 |
-| ACPI 热区 WMI | 常拿不到核心温度，不可靠 —— 不采用 |
+| **PawnIO driver** (current primary) | Needs the driver installed + admin rights; no resident app required |
+| LibreHardwareMonitor HTTP (fallback) | Needs LHM running |
+| Own signed driver | EV certificate + Microsoft attestation; costly and often blocked — not used |
+| ACPI thermal-zone WMI | Often cannot read core temperature — not used |
 
-### 4.1 PawnIO 协议
+### 4.1 PawnIO protocol
 
 ```
-打开 \\.\GLOBALROOT\Device\PawnIO
-  → DeviceIoControl(IOCTL_PIO_LOAD_BINARY, 模块字节)     // 载入 .bin 模块
-  → DeviceIoControl(IOCTL_PIO_EXECUTE_FN, [32字节函数名][i64 参数…])  // 执行并取回 i64 结果
+open \\.\GLOBALROOT\Device\PawnIO
+  → DeviceIoControl(IOCTL_PIO_LOAD_BINARY, module bytes)            // load a .bin module
+  → DeviceIoControl(IOCTL_PIO_EXECUTE_FN, [32-byte fn name][i64 args…])  // run, get i64 results
 ```
 
-`DEVICE_TYPE = 41394 << 16`；`LOAD_BINARY = DEVICE_TYPE | (0x821 << 2)`；`EXECUTE_FN = DEVICE_TYPE | (0x841 << 2)`。
+`DEVICE_TYPE = 41394 << 16`; `LOAD_BINARY = DEVICE_TYPE | (0x821 << 2)`; `EXECUTE_FN = DEVICE_TYPE | (0x841 << 2)`.
 
-### 4.2 寄存器与换算
+### 4.2 Registers and formulas
 
-- **AMD**：`ioctl_read_smn(0x00059800)` → `temp = ((raw >> 21) & 0x7FF) * 0.125`；若 `raw & 0x80000 != 0` 或 `raw & 0x30000 == 0x30000` 再减 49°C。
-- **Intel**：`ioctl_read_msr(0x1A2)` 取 TjMax（bit 16..24）；`0x1B1`（Package）或 `0x19C`（Core）的 DTS 读数 `delta`（bit 16..22）；`temp = TjMax - delta`。
+- **AMD**: `ioctl_read_smn(0x00059800)` → `temp = ((raw >> 21) & 0x7FF) * 0.125`; subtract 49°C when `raw & 0x80000 != 0` or `raw & 0x30000 == 0x30000`.
+- **Intel**: `ioctl_read_msr(0x1A2)` gives TjMax (bits 16..24); the DTS reading `delta` (bits 16..22) comes from `0x1B1` (package) or `0x19C` (core); `temp = TjMax - delta`.
 
-模块来自 [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Modules)（LGPL-2.1），随应用嵌入。
+Modules come from [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Modules) (LGPL-2.1) and are embedded in the app.
 
-## 5. 提权与自启
+## 5. Elevation and autostart
 
-- 直读需要管理员权限（PawnIO 设备限制），这是硬约束。
-- **自提权**：启动时用 `OpenProcessToken` + `TokenElevation` 判断；未提权则 `ShellExecuteW("runas")` 重启自己（弹一次 UAC）。计划任务启动时已是管理员，不会再弹。
-- **自启**：用 `schtasks` 建登录计划任务 `deskpulse`（`/SC ONLOGON /RL HIGHEST`），免去每次登录的 UAC。app 内「开机自启」开关即管理该任务。
+- Direct reading needs administrator rights (a PawnIO device restriction); this is a hard constraint.
+- **Self-elevation**: on startup `OpenProcessToken` + `TokenElevation` decides; if not elevated the app relaunches itself via `ShellExecuteW("runas")` (one UAC prompt). When started by the scheduled task it is already elevated, so no prompt.
+- **Autostart**: a logon scheduled task `deskpulse` is created with `schtasks` (`/SC ONLOGON /RL HIGHEST`), avoiding a UAC prompt at every logon. The in-app "Start with Windows" toggle manages that task.
 
-## 6. 窗口与布局
+## 6. Window and layout
 
-- **贴合内容**：每帧取内容矩形，与上次尺寸比较，差异超过阈值才发 `InnerSize`，避免抖动。
-- **固定单元格**：标签/数值用固定宽度的框（紧凑 40 / 74，宽松 46 / 92），数字位数变化不会改变窗口宽度。
-- **对齐**：紧凑模式下第一列标签右对齐、数值左对齐；竖两排的第二列标签左对齐（各自左边缘对齐）。对齐布局用 `set_min_width` 强制框宽，否则会缩到文字宽度导致列漂移。
-- **间距预设**：`item_spacing.x = 0`，标签↔数值的 4pt 在单元格内显式添加；竖两排两列之间无间隔。
-- **菜单**：延迟视口，深色 `Visuals` + 近黑底近白字（不依赖系统主题），二级结构；动作通过 `Arc<Mutex<MenuState>>` 队列回传，父级每帧回收。
+- **Content fitting**: each frame takes the content rect, compares it with the previous size and only sends `InnerSize` past a threshold, avoiding jitter.
+- **Fixed cells**: labels/values use fixed-width boxes (tight 40 / 74, loose 46 / 92), so digit changes do not change the window width.
+- **Alignment**: in tight mode the first column's label is right-aligned and its value left-aligned; the two-column layout's second-column labels are left-aligned (their left edges line up). Aligned layouts force the box width with `set_min_width`, otherwise the box shrinks to the text and the column drifts.
+- **Spacing preset**: `item_spacing.x = 0`; the 4pt label↔value gap is added explicitly inside a cell; there is no gap between the two columns.
+- **Menu**: a deferred viewport with dark `Visuals` + near-black background and near-white text (not tied to the system theme), two-level structure; actions are passed back through an `Arc<Mutex<MenuState>>` queue that the parent drains every frame.
 
-## 7. 配置与迁移
+## 7. Configuration and migration
 
-- 路径 `%APPDATA%\deskpulse\config.toml`；`#[serde(default)]` 保证字段缺失时用默认值。
-- 首次运行若新路径不存在，会尝试读取旧路径 `%APPDATA%\desk-stats\config.toml` 并迁移（项目曾用名 `desk-stats`）。
-- `language` 为 `Option`：未设置时按系统 UI 语言（`GetUserDefaultUILanguage`）选择。
+- Path `%APPDATA%\deskpulse\config.toml`; `#[serde(default)]` fills missing fields with defaults.
+- On first run, if the new path is missing, the app reads the old path `%APPDATA%\desk-stats\config.toml` and migrates it (the project used to be named `desk-stats`).
+- `language` is an `Option`: when unset it is chosen from the system UI language (`GetUserDefaultUILanguage`).
 
-## 8. 打包
+## 8. Packaging
 
-- `build.rs` 用 `winresource` 嵌入 `assets/icon.ico` 与版本信息。
-- `.cargo/config.toml` 对 msvc 目标开启 `+crt-static`，免 VC++ 运行时。
-- release：`lto` + `codegen-units=1` + `strip` + `panic="abort"`，成品约 5.9 MB。
+- `build.rs` embeds `assets/icon.ico` and version info with `winresource`.
+- `.cargo/config.toml` enables `+crt-static` for the msvc target, removing the VC++ runtime dependency.
+- release: `lto` + `codegen-units=1` + `strip` + `panic="abort"`, about 5.9 MB.
 
-## 9. 关键取舍记录
+## 9. Key trade-offs
 
-1. **CPU 温度从 WMI 改为 PawnIO 直读。** 新版 LibreHardwareMonitor（0.9.x）移除了 WMI provider，原 `root\LibreHardwareMonitor` 方案已失效；进一步地，为了摆脱对常驻 app 的依赖，改为直连 PawnIO 驱动。LHM HTTP 仅作退路。
-2. **GPU 只走 NVML。** 未实现 PDH 通用退路，非 NVIDIA 显卡相关项显示 `--`。
-3. **不做自研驱动、不内嵌隐藏检测程序。** 前者成本/维护过高，后者会被杀软视为恶意行为。
-4. **未知即 `--`。** 不用 `0` 冒充。
+1. **CPU temperature moved from WMI to a direct PawnIO read.** Newer LibreHardwareMonitor (0.9.x) removed the WMI provider, so the old `root\LibreHardwareMonitor` approach no longer works; going further, to drop the dependency on a resident app we read the PawnIO driver directly. LHM HTTP is only a fallback.
+2. **GPU uses NVML only.** No generic PDH fallback; non-NVIDIA GPUs show `--`.
+3. **No custom driver, no embedded hidden helper.** The first is too costly to maintain; the second is treated as malware by AV.
+4. **Unknown means `--`.** Never substitute `0`.
 
-## 10. 已知限制 / 未做
+## 10. Known limitations / not done
 
-- 直读温度需管理员；非管理员时回退 LHM（未安装则 `--`）。
-- Intel 温度路径已实现但未在 Intel 机器上验证（开发机为 AMD）。
-- 多 GPU 只取 `device_by_index(0)`。
-- 未做历史曲线、日志持久化、多语言（仅中/英）。
+- Direct temperature reading needs admin; without it the app falls back to LHM (`--` if not installed).
+- The Intel temperature path is implemented but not verified on an Intel machine (the dev machine is AMD).
+- Multiple GPUs: only `device_by_index(0)` is used.
+- No history graphs, no log persistence, only zh/en.
