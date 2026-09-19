@@ -6,6 +6,7 @@ mod cpu;
 mod gpu;
 mod mem;
 mod net;
+mod pawnio;
 mod temp;
 
 /// A point-in-time view of all metrics.

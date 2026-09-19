@@ -3,7 +3,10 @@
 mod app;
 mod autostart;
 mod config;
+mod diag;
+mod elevate;
 mod format;
+mod i18n;
 mod metrics;
 mod tray;
 
@@ -14,6 +17,12 @@ use eframe::egui;
 fn main() -> eframe::Result {
     if std::env::args().any(|arg| arg == "--dump") {
         dump();
+        return Ok(());
+    }
+
+    // CPU temperature needs the PawnIO driver, which requires elevation.
+    // Relaunch elevated if we are not already (no-op under the logon task).
+    if elevate::ensure_elevated() {
         return Ok(());
     }
 

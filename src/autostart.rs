@@ -1,36 +1,65 @@
-use auto_launch::{AutoLaunch, AutoLaunchBuilder};
+use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
+use std::process::Command;
 
-const APP_NAME: &str = "deskpulse";
+const TASK_NAME: &str = "deskpulse";
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// Thin wrapper around the `Run` registry key entry used for launching at login.
+/// Manages the logon scheduled task that launches the app with highest
+/// privileges.
+///
+/// Elevation is required for CPU temperature: the PawnIO kernel driver only
+/// accepts requests from an elevated process. A scheduled task with
+/// `RunLevel Highest` gives that without a UAC prompt at every logon, which a
+/// plain `HKCU\...\Run` entry cannot do.
 pub struct Autostart {
-    inner: Option<AutoLaunch>,
+    exe: Option<PathBuf>,
 }
 
 impl Autostart {
     pub fn new() -> Self {
-        let inner = std::env::current_exe().ok().and_then(|exe| {
-            AutoLaunchBuilder::new()
-                .set_app_name(APP_NAME)
-                .set_app_path(&exe.to_string_lossy())
-                .build()
-                .ok()
-        });
-        Self { inner }
+        Self {
+            exe: std::env::current_exe().ok(),
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.inner
-            .as_ref()
-            .and_then(|auto| auto.is_enabled().ok())
+        Command::new("schtasks")
+            .args(["/Query", "/TN", TASK_NAME])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .map(|status| status.success())
             .unwrap_or(false)
     }
 
     pub fn set(&self, enabled: bool) -> bool {
-        let Some(auto) = self.inner.as_ref() else {
+        let Some(exe) = self.exe.as_ref() else {
             return false;
         };
-        let result = if enabled { auto.enable() } else { auto.disable() };
-        result.is_ok()
+
+        let status = if enabled {
+            Command::new("schtasks")
+                .args([
+                    "/Create",
+                    "/TN",
+                    TASK_NAME,
+                    "/TR",
+                    &format!("\"{}\"", exe.display()),
+                    "/SC",
+                    "ONLOGON",
+                    "/RL",
+                    "HIGHEST",
+                    "/F",
+                ])
+                .creation_flags(CREATE_NO_WINDOW)
+                .status()
+        } else {
+            Command::new("schtasks")
+                .args(["/Delete", "/TN", TASK_NAME, "/F"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .status()
+        };
+
+        status.map(|status| status.success()).unwrap_or(false)
     }
 }

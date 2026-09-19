@@ -5,20 +5,25 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
-/// CPU temperature read from LibreHardwareMonitor's built-in HTTP server.
+use crate::diag;
+use crate::metrics::pawnio::CpuTemp;
+
+/// CPU temperature.
 ///
-/// Modern LibreHardwareMonitor (0.9.x) no longer exposes a WMI provider; it
-/// serves its sensor tree as JSON instead. The server is off by default, so the
-/// user must enable "Run web server" in LHM (port 8085 by default).
+/// Primary source is the hardware itself, read straight through the PawnIO
+/// kernel driver (no other application needs to run). When PawnIO is not
+/// available (driver missing, or an unsupported CPU vendor), it falls back to
+/// LibreHardwareMonitor's HTTP server.
 ///
-/// Windows has no reliable public CPU temperature API, so this is the only
-/// honest source. When LHM is not reachable the sample is `None` and the UI
-/// shows `--`.
+/// Windows has no reliable public user-mode CPU temperature API, so the driver
+/// route is the only way to avoid depending on a running helper app.
 pub struct TempCollector {
     port: u16,
+    cpu: CpuTemp,
     cached: Option<f32>,
     ticks: u32,
     cooldown: u32,
+    source: Option<&'static str>,
 }
 
 #[derive(Deserialize, Default)]
@@ -45,15 +50,39 @@ const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl TempCollector {
     pub fn new(port: u16) -> Self {
+        let cpu = CpuTemp::new();
+        diag::reset(&format!("startup: {}", cpu.describe()));
         Self {
             port,
+            cpu,
             cached: None,
             ticks: QUERY_INTERVAL_TICKS,
             cooldown: 0,
+            source: None,
+        }
+    }
+
+    fn set_source(&mut self, source: &'static str) {
+        if self.source != Some(source) {
+            self.source = Some(source);
+            diag::log(&format!("temperature source: {source}"));
         }
     }
 
     pub fn sample(&mut self) -> Option<f32> {
+        // Hardware first: no other application involved.
+        if let Some(temperature) = self.cpu.sample() {
+            self.set_source("PawnIO");
+            self.cached = Some(temperature);
+            self.cooldown = 0;
+            return Some(temperature);
+        }
+
+        // Fallback: LibreHardwareMonitor's HTTP server.
+        self.sample_lhm()
+    }
+
+    fn sample_lhm(&mut self) -> Option<f32> {
         if self.cooldown > 0 {
             self.cooldown -= 1;
             return self.cached;
@@ -67,6 +96,7 @@ impl TempCollector {
 
         match fetch_json(self.port).and_then(|json| cpu_temp_from_json(&json)) {
             Some(temp) => {
+                self.set_source("LHM");
                 self.cached = Some(temp);
             }
             None => {

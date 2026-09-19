@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-auto-launch = "0.6.0"
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts"] }
 egui = "0.36.2"
 nvml-wrapper = "0.13.0"
