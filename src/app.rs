@@ -227,6 +227,15 @@ pub struct DeskStatsApp {
     last_fit: Option<egui::Vec2>,
 }
 
+/// The native window handle, used to hide the window from the taskbar.
+fn window_hwnd(frame: &eframe::Frame) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match frame.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(win32) => Some(win32.hwnd.get()),
+        _ => None,
+    }
+}
+
 impl DeskStatsApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: Config) -> Self {
         install_cjk_font(&cc.egui_ctx);
@@ -724,8 +733,14 @@ impl eframe::App for DeskStatsApp {
         ctx.request_repaint_after(Duration::from_millis(400));
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+
+        // Keep the window out of the taskbar: eframe ignores with_taskbar(false)
+        // and winit re-applies its styles on show, so this runs every frame.
+        if let Some(hwnd) = window_hwnd(frame) {
+            crate::window::ensure_tool_window(hwnd);
+        }
 
         if let Some(rect) = ctx.input(|input| input.viewport().outer_rect) {
             self.config.position = Some([rect.min.x, rect.min.y]);

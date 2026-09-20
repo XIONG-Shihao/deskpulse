@@ -9,6 +9,7 @@ mod format;
 mod i18n;
 mod metrics;
 mod tray;
+mod window;
 
 use std::time::Duration;
 
@@ -25,6 +26,8 @@ fn main() -> eframe::Result {
     if elevate::ensure_elevated() {
         return Ok(());
     }
+
+    diag::reset("deskpulse started");
 
     let config = config::Config::load();
 

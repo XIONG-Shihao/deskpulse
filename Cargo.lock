@@ -445,6 +445,7 @@ dependencies = [
  "eframe",
  "egui",
  "nvml-wrapper",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "sysinfo",

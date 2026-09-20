@@ -51,7 +51,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(2);
 impl TempCollector {
     pub fn new(port: u16) -> Self {
         let cpu = CpuTemp::new();
-        diag::reset(&format!("startup: {}", cpu.describe()));
+        diag::log(&format!("temperature backend: {}", cpu.describe()));
         Self {
             port,
             cpu,
