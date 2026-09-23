@@ -66,6 +66,16 @@ const AC_SRC_ALPHA: u8 = 1;
 
 const IDC_ARROW: isize = 32512;
 
+/// Temporary alpha/compositor probe. When true, every repaint logs what alpha we
+/// wrote and what the window actually looks like on screen, plus the layered /
+/// DWM window state, so a transparency change that is *not* ours can be told
+/// apart from one that is.
+const ALPHA_PROBE: bool = true;
+const DWMWA_CLOAKED: u32 = 14;
+/// Border around the window sampled by the probe, to read the backdrop.
+const PROBE_PAD: i32 = 8;
+const SRCCOPY: u32 = 0x00CC_0020;
+
 // Logical layout units (scaled by the monitor DPI at draw time).
 const MARGIN: f32 = 2.0;
 /// One typographic point (1/72 inch) expressed in logical 96-DPI units. A
@@ -204,6 +214,14 @@ unsafe extern "system" {
     fn ShowWindow(hwnd: isize, command: i32) -> i32;
     fn LoadCursorW(instance: isize, name: isize) -> isize;
     fn GetDpiForWindow(hwnd: isize) -> u32;
+    fn GetDC(hwnd: isize) -> isize;
+    fn ReleaseDC(hwnd: isize, dc: isize) -> i32;
+    fn GetLayeredWindowAttributes(
+        hwnd: isize,
+        key: *mut u32,
+        alpha: *mut u8,
+        flags: *mut u32,
+    ) -> i32;
     fn SetProcessDpiAwarenessContext(value: isize) -> i32;
     fn SetProcessDPIAware() -> i32;
     fn UpdateLayeredWindow(
@@ -223,6 +241,17 @@ unsafe extern "system" {
 unsafe extern "system" {
     fn CreateCompatibleDC(dc: isize) -> isize;
     fn DeleteDC(dc: isize) -> i32;
+    fn BitBlt(
+        dst: isize,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        src: isize,
+        src_x: i32,
+        src_y: i32,
+        rop: u32,
+    ) -> i32;
     fn GetTextExtentPoint32W(dc: isize, text: *const u16, len: i32, size: *mut Size) -> i32;
     fn CreateDIBSection(
         dc: isize,
@@ -253,6 +282,11 @@ unsafe extern "system" {
         pitch: u32,
         face: *const u16,
     ) -> isize;
+}
+
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    fn DwmGetWindowAttribute(hwnd: isize, attribute: u32, value: *mut c_void, size: u32) -> i32;
 }
 
 static INSTANCE: AtomicPtr<Overlay> = AtomicPtr::new(std::ptr::null_mut());
@@ -380,6 +414,8 @@ struct Canvas {
     label_font: isize,
     value_font: isize,
     bits: *mut c_void,
+    bitmap_width: i32,
+    bitmap_height: i32,
 }
 
 impl Canvas {
@@ -466,6 +502,8 @@ impl Canvas {
                 label_font,
                 value_font,
                 bits,
+                bitmap_width: width,
+                bitmap_height: height,
             })
         }
     }
@@ -595,6 +633,9 @@ pub struct Overlay {
     menu_ids: Arc<Mutex<Vec<String>>>,
     canvas: Option<Canvas>,
     canvas_key: Option<(i32, i32, i32)>,
+    probe_canvas: Option<Canvas>,
+    probe_key: Option<(i32, i32)>,
+    probe_frames: u32,
     metrics: Option<TextMetrics>,
     metrics_key: Option<i32>,
     size: (i32, i32),
@@ -620,6 +661,9 @@ impl Overlay {
             menu_ids: Arc::new(Mutex::new(Vec::new())),
             canvas: None,
             canvas_key: None,
+            probe_canvas: None,
+            probe_key: None,
+            probe_frames: 0,
             metrics: None,
             metrics_key: None,
             size: (1, 1),
@@ -972,6 +1016,7 @@ impl Overlay {
             return;
         }
         let scale = self.scale;
+        let alpha = (self.config.opacity.clamp(0.0, 1.0) * 255.0) as u8;
 
         // SAFETY: all GDI objects are used on the UI thread.
         unsafe {
@@ -997,7 +1042,6 @@ impl Overlay {
                 return;
             };
 
-            let alpha = (self.config.opacity.clamp(0.0, 1.0) * 255.0) as u8;
             let pixels = width as usize * height as usize;
             let data = canvas.bits as *mut u8;
             let radius = (10.0 * scale).round() as i32;
@@ -1077,6 +1121,167 @@ impl Overlay {
             );
             let _ = result;
         }
+
+        self.probe(alpha);
+    }
+
+    /// Logs the alpha we wrote against what the window actually shows on
+    /// screen, plus the layered / DWM window state. If the effective alpha on
+    /// screen is lower than the one we drew, something outside the process is
+    /// fading the window.
+    fn probe(&mut self, dib_alpha: u8) {
+        if !ALPHA_PROBE || self.hwnd == 0 {
+            return;
+        }
+
+        // SAFETY: read-only queries about our own window.
+        let (lwa_ok, lwa_flags, lwa_alpha) = unsafe {
+            let mut key: u32 = 0;
+            let mut alpha: u8 = 0;
+            let mut flags: u32 = 0;
+            let ok = GetLayeredWindowAttributes(self.hwnd, &mut key, &mut alpha, &mut flags);
+            (ok, flags, alpha)
+        };
+        let cloaked = unsafe {
+            let mut value: i32 = 0;
+            let rc = DwmGetWindowAttribute(
+                self.hwnd,
+                DWMWA_CLOAKED,
+                &mut value as *mut i32 as *mut c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+            if rc == 0 { value } else { -1 }
+        };
+
+        // Grab the window plus a border in one BitBlt and read the pixels from
+        // memory. (GetPixel on the screen DC is unusably slow: each call is a
+        // separate GPU readback.)
+        let mut inside: Vec<i32> = Vec::new();
+        let mut ring: Vec<i32> = Vec::new();
+        let mut captured = false;
+        unsafe {
+            let mut rect = Rect::default();
+            if GetWindowRect(self.hwnd, &mut rect) != 0 {
+                let width = rect.right - rect.left;
+                let height = rect.bottom - rect.top;
+                let probe_w = width + PROBE_PAD * 2;
+                let probe_h = height + PROBE_PAD * 2;
+                if self.probe_key != Some((probe_w, probe_h)) {
+                    self.probe_canvas = Canvas::create(probe_w, probe_h, self.scale);
+                    self.probe_key = Some((probe_w, probe_h));
+                }
+                if let Some(probe) = self.probe_canvas.as_ref() {
+                    let screen = GetDC(0);
+                    let copied = BitBlt(
+                        probe.memory_dc,
+                        0,
+                        0,
+                        probe_w,
+                        probe_h,
+                        screen,
+                        rect.left - PROBE_PAD,
+                        rect.top - PROBE_PAD,
+                        SRCCOPY,
+                    );
+                    ReleaseDC(0, screen);
+                    if copied != 0 {
+                        captured = true;
+                        let data = probe.bits as *const u8;
+                        for y in 0..probe_h {
+                            for x in 0..probe_w {
+                                let at =
+                                    ((y as usize * probe_w as usize + x as usize) * 4) as isize;
+                                let luminance = {
+                                    let b = *data.offset(at) as i32;
+                                    let g = *data.offset(at + 1) as i32;
+                                    let r = *data.offset(at + 2) as i32;
+                                    (r * 30 + g * 59 + b * 11) / 100
+                                };
+                                let inside_panel = x >= PROBE_PAD
+                                    && x < PROBE_PAD + width
+                                    && y >= PROBE_PAD
+                                    && y < PROBE_PAD + height;
+                                if inside_panel {
+                                    inside.push(luminance);
+                                } else if x % 4 == 0 && y % 4 == 0 {
+                                    ring.push(luminance);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        inside.sort_unstable();
+        ring.sort_unstable();
+        // The panel background is the bulk of the interior (text and the rounded
+        // corners are the minority), so a low percentile reads it robustly.
+        let panel_bg = inside.get(inside.len() / 4).copied().unwrap_or(0);
+        let panel_max = inside.last().copied().unwrap_or(0);
+        let backdrop = ring.get(ring.len() / 2).copied().unwrap_or(0);
+
+        let effective = if captured && backdrop >= 60 && panel_bg < backdrop - 5 {
+            (10.0 - panel_bg as f32 / backdrop as f32 * 10.0).round() as i32
+        } else {
+            -1
+        };
+        let drawn = dib_alpha as i32 * 10 / 255;
+        let deviates = effective >= 0 && (effective - drawn).abs() > 1;
+
+        self.probe_frames = self.probe_frames.wrapping_add(1);
+        // Keep a picture of the moment: whenever the alpha on screen disagrees
+        // with the one we drew, and otherwise as a periodic sample.
+        if captured
+            && (deviates || self.probe_frames.is_multiple_of(10))
+            && let Some(probe) = self.probe_canvas.as_ref()
+        {
+            let probe_w = probe.bitmap_width;
+            let probe_h = probe.bitmap_height;
+            if probe_w > 0 && probe_h > 0 {
+                let pixels = (probe_w * probe_h * 4) as usize;
+                let mut out = Vec::with_capacity(54 + pixels);
+                out.extend_from_slice(b"BM");
+                out.extend_from_slice(&((54 + pixels) as u32).to_le_bytes());
+                out.extend_from_slice(&0u32.to_le_bytes());
+                out.extend_from_slice(&54u32.to_le_bytes());
+                out.extend_from_slice(&40u32.to_le_bytes());
+                out.extend_from_slice(&probe_w.to_le_bytes());
+                out.extend_from_slice(&(-probe_h).to_le_bytes());
+                out.extend_from_slice(&1u16.to_le_bytes());
+                out.extend_from_slice(&32u16.to_le_bytes());
+                out.extend_from_slice(&0u32.to_le_bytes());
+                out.extend_from_slice(&(pixels as u32).to_le_bytes());
+                out.extend_from_slice(&2835u32.to_le_bytes());
+                out.extend_from_slice(&2835u32.to_le_bytes());
+                out.extend_from_slice(&0u32.to_le_bytes());
+                out.extend_from_slice(&0u32.to_le_bytes());
+                // SAFETY: the DIB owns `width * height * 4` bytes.
+                let data = unsafe { std::slice::from_raw_parts(probe.bits as *const u8, pixels) };
+                out.extend_from_slice(data);
+                if let Some(base) = std::env::var_os("APPDATA") {
+                    let path = std::path::PathBuf::from(base)
+                        .join("deskpulse")
+                        .join("probe.bmp");
+                    let _ = std::fs::write(path, out);
+                }
+            }
+        }
+
+        let layered = if lwa_ok != 0 {
+            format!("GLOBAL(flags=0x{lwa_flags:X} alpha={lwa_alpha})")
+        } else {
+            "per-pixel".to_owned()
+        };
+        let effective_text = if effective < 0 {
+            "--".to_owned()
+        } else {
+            format!("{:.2}", effective as f32 / 10.0)
+        };
+        crate::diag::log(&format!(
+            "{}repaint dib_alpha={dib_alpha} ({:.2}) layered={layered} cloaked={cloaked} backdrop={backdrop} panel_bg={panel_bg} panel_max={panel_max} effective_alpha={effective_text}",
+            if deviates { "MISMATCH: " } else { "" },
+            dib_alpha as f32 / 255.0,
+        ));
     }
 
     // ------------------------------------------------------------- menu
