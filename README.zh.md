@@ -43,6 +43,24 @@ cargo run --release
 cargo run -- --dump
 ```
 
+
+## 打包成独立 exe
+
+`cargo build --release` 产出的 `target\release\deskpulse.exe` 即为可分发的单文件程序：
+
+- **带应用图标与版本信息**：由 `build.rs` + `winresource` 嵌入 `assets/icon.ico`。
+- **不依赖 VC++ 运行时**：`.cargo\config.toml` 对 `x86_64-pc-windows-msvc` 开启 `+crt-static`。
+- **体积优化**：release 开启 `lto`、`codegen-units = 1`、`strip`、`panic = "abort"`。
+- **无控制台窗口**：release 构建带 `windows_subsystem = "windows"`。
+
+```powershell
+cargo build --release
+Copy-Item .\target\release\deskpulse.exe .\dist\deskpulse.exe
+```
+
+`dist\deskpulse.exe` 可直接双击运行或拷给别人。重新生成图标：`pwsh -File .\assets\make-icon.ps1`。
+
+
 ## 性能
 
 在开发机上实测（除悬浮窗外桌面处于空闲）：
@@ -73,21 +91,6 @@ cargo run -- --dump
 
 对比：同一悬浮窗此前的 `egui` / `wgpu` 构建工作集约 **125 MB**（OpenGL 后端）和 **420 MB**（WARP 后端），CPU 也高一个数量级。
 
-## 打包成独立 exe
-
-`cargo build --release` 产出的 `target\release\deskpulse.exe` 即为可分发的单文件程序：
-
-- **带应用图标与版本信息**：由 `build.rs` + `winresource` 嵌入 `assets/icon.ico`。
-- **不依赖 VC++ 运行时**：`.cargo\config.toml` 对 `x86_64-pc-windows-msvc` 开启 `+crt-static`。
-- **体积优化**：release 开启 `lto`、`codegen-units = 1`、`strip`、`panic = "abort"`。
-- **无控制台窗口**：release 构建带 `windows_subsystem = "windows"`。
-
-```powershell
-cargo build --release
-Copy-Item .\target\release\deskpulse.exe .\dist\deskpulse.exe
-```
-
-`dist\deskpulse.exe` 可直接双击运行或拷给别人。重新生成图标：`pwsh -File .\assets\make-icon.ps1`。
 
 ## 文件结构
 

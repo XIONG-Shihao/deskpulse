@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-A pure-Rust Windows desktop overlay that shows live system status:
+A pure-Rust Windows desktop overlay that run on pure x64 CPU shows live system status:
 
 - Upload / download speed
 - CPU usage + CPU temperature
@@ -22,26 +22,6 @@ cargo run --release
 ```
 
 A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu (Show / Layout / Spacing / Align / Language / Start with Windows / Quit; the first five expand into submenus). The tray menu offers the same actions.
-
-### UI behaviour
-
-- **The panel hugs its content**: the name and value columns are sized from the measured text width (`GetTextExtentPoint32W`), so the panel is exactly as wide as its widest row and there is no wasted transparent area or stray click region.
-- **No width jitter**: the panel grows the moment a value needs more room, but only shrinks once the content is clearly narrower, so changing digits do not make the edge twitch.
-- **DPI aware**: the process declares per-monitor-v2 DPI awareness. The panel and fonts are laid out at the monitor's native pixel grid, and everything re-scales when the window is dragged to a monitor with a different scaling factor.
-- **Point-based gap**: the name↔value gap is a physical 2 pt (rounded up to a whole pixel), so it keeps the same physical size at any resolution and display scaling.
-- **Text alignment**: left / center / right, applied to each metric's name and value inside its cell.
-- **Three layouts**: vertical (one item per row), horizontal (all items in one row), two-column (two items per row; default order Up/Down, CPU/CPU T, Mem/GPU, VRAM/GPU T).
-- **Two spacing presets**: tight / loose — the vertical gap between rows.
-- **Dark and translucent**: near-black panel with a configurable alpha (default `0.72`); the metric text always stays opaque.
-- **Selectable metrics**: tick items under "Show"; hidden items take no space and the panel shrinks accordingly.
-- **Chinese/English**: on first run the language follows the Windows UI language (English systems → English, otherwise Chinese); switch anytime under "Language".
-- **Speed format**: at most 3 integer digits and 1 decimal (`5.9 KB/s`, `999.9 KB/s`); when the integer part is 0, 2 decimals (`0.98 KB/s`); more than 3 integer digits rolls over to the next unit (`1023.9 KB/s` → `1.00 MB/s`).
-
-Diagnostic mode (no window, prints 5 samples and exits):
-
-```powershell
-cargo run -- --dump
-```
 
 ## Performance
 
@@ -72,6 +52,27 @@ Why it is this cheap:
 - **No GPU API at all.** The UI never touches OpenGL / Direct3D / Vulkan, so it also works on machines with only the Microsoft Basic Display adapter, inside virtual machines and over Remote Desktop.
 
 For comparison, the earlier `egui` / `wgpu` builds of the same overlay used ≈ 125 MB (OpenGL backend) and ≈ 420 MB (WARP backend) of working set, and an order of magnitude more CPU.
+
+
+### UI behaviour
+
+- **The panel hugs its content**: the name and value columns are sized from the measured text width (`GetTextExtentPoint32W`), so the panel is exactly as wide as its widest row and there is no wasted transparent area or stray click region.
+- **No width jitter**: the panel grows the moment a value needs more room, but only shrinks once the content is clearly narrower, so changing digits do not make the edge twitch.
+- **DPI aware**: the process declares per-monitor-v2 DPI awareness. The panel and fonts are laid out at the monitor's native pixel grid, and everything re-scales when the window is dragged to a monitor with a different scaling factor.
+- **Point-based gap**: the name↔value gap is a physical 2 pt (rounded up to a whole pixel), so it keeps the same physical size at any resolution and display scaling.
+- **Text alignment**: left / center / right, applied to each metric's name and value inside its cell.
+- **Three layouts**: vertical (one item per row), horizontal (all items in one row), two-column (two items per row; default order Up/Down, CPU/CPU T, Mem/GPU, VRAM/GPU T).
+- **Two spacing presets**: tight / loose — the vertical gap between rows.
+- **Dark and translucent**: near-black panel with a configurable alpha (default `0.72`); the metric text always stays opaque.
+- **Selectable metrics**: tick items under "Show"; hidden items take no space and the panel shrinks accordingly.
+- **Chinese/English**: on first run the language follows the Windows UI language (English systems → English, otherwise Chinese); switch anytime under "Language".
+- **Speed format**: at most 3 integer digits and 1 decimal (`5.9 KB/s`, `999.9 KB/s`); when the integer part is 0, 2 decimals (`0.98 KB/s`); more than 3 integer digits rolls over to the next unit (`1023.9 KB/s` → `1.00 MB/s`).
+
+Diagnostic mode (no window, prints 5 samples and exits):
+
+```powershell
+cargo run -- --dump
+```
 
 ## Packaging a standalone exe
 
