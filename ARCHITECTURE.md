@@ -9,16 +9,16 @@ This document records the current tech choices, architecture and key trade-offs.
 | Area | Choice | Notes |
 | --- | --- | --- |
 | Language | Rust, edition 2024 | Windows only (`x86_64-pc-windows-msvc`) |
-| GUI | `eframe` / `egui` `0.36` (wgpu, D3D12 WARP backend) | Immediate-mode GUI; CPU software rendering, borderless, transparent, always-on-top window |
+| GUI | Native Win32 layered window + GDI, hand-written FFI | Per-pixel-alpha `UpdateLayeredWindow`; no GPU API, no GUI framework |
 | Network / CPU / memory | `sysinfo` `0.39` | Interface byte counters, CPU usage, memory |
 | GPU | `nvml-wrapper` `0.13` | NVIDIA NVML: usage / VRAM / temperature (loads `nvml.dll` at runtime) |
 | CPU temperature (primary) | PawnIO kernel driver + hand-written FFI | No third-party Rust wrapper; uses `CreateFile` / `DeviceIoControl` directly |
 | CPU temperature (fallback) | `serde_json` + std `TcpStream` | Polls LibreHardwareMonitor's `http://127.0.0.1:8085/data.json` |
-| Tray / menus | `tray-icon` `0.25` (uses muda) | Tray icon and native menus |
+| Tray / menus | `tray-icon` `0.25` (uses muda) | Tray icon and the native right-click menu |
 | Config | `serde` + `toml` | `%APPDATA%\deskpulse\config.toml` |
 | Autostart | `schtasks.exe` | Scheduled task, `RunLevel Highest` |
 | Packaging | `winresource`, `+crt-static`, LTO | Icon/version info, no VC++ runtime, single-file exe |
-| Chinese text | system font loaded at runtime | egui ships no CJK glyphs |
+| Chinese text | `Microsoft YaHei` via `CreateFontW` | GDI renders CJK without shipping glyphs |
 
 Design principles: minimise dependencies; every metric that may be unavailable is an `Option` rendered as `--`, and **`0` is never used as a stand-in for unknown**.
 
@@ -27,52 +27,48 @@ Design principles: minimise dependencies; every metric that may be unavailable i
 ### 2.1 Threading model
 
 ```
-main thread (eframe/winit event loop)
-├── root viewport: the overlay (metric display)
-├── native Win32 layered window: opaque metric text (click-through)
-├── deferred viewport: right-click settings menu (its own small window)
-└── App::logic every frame: drain menu actions, handle tray events, request repaint
+main thread — Win32 message loop (GetMessageW / DispatchMessageW)
+├── owns the layered window: lays out, draws into a DIB, handles input and the menu
+└── on WM_APP_DATA refresh the panel; on WM_APP_MENU apply a menu action
 
 collector thread (1)
-└── periodic sampling → writes Arc<Mutex<Snapshot>>
+└── samples every refresh_secs → writes Arc<Mutex<Snapshot>> → PostMessageW(WM_APP_DATA)
 
-menu-event thread (1)
-└── blocks on MenuEvent::recv(); on event, enqueue + ctx.request_repaint()
+muda / tray event thread (owned by tray-icon)
+└── MenuEvent handler → queue the id → PostMessageW(WM_APP_MENU)
 ```
 
-- **Collection is decoupled from the UI**: system calls happen only on the collector thread; the UI reads one snapshot per frame instead of querying every frame.
-- **Menu events wake the UI immediately**: polling tray events only from `logic` would wait up to one repaint period (~400ms); the listener thread calls `request_repaint()` so quit/switch actions take effect instantly.
-- **UI rasterization runs on the CPU**: `main.rs` restricts wgpu to Direct3D 12 and selects only an adapter reported as `DeviceType::Cpu` (Windows WARP). All three native viewports share this renderer. Startup fails if no compatible software adapter is available; it does not fall back to a hardware GPU.
+- **Collection is decoupled from the UI**: system calls happen only on the collector thread; the UI clones one `Snapshot` when it is woken.
+- **Event-driven, no render loop**: the collector posts `WM_APP_DATA` after each new sample, so the panel redraws once per tick and does nothing in between.
+- **Menu events are queued, not handled in place**: muda delivers events on its own thread, so the handler pushes the id into an `Arc<Mutex<Vec<String>>>` and posts `WM_APP_MENU`; the main thread owns all UI state.
 
 ### 2.2 Data flow
 
 ```
-Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► App::ui clones each frame
+Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► refresh() clones once per tick
 ```
 
 `Snapshot` holds all 8 metrics, each an `Option` (`None` when unavailable). Percentages and VRAM ratios are computed on the UI side from raw values.
 
-### 2.3 Viewport model
+### 2.3 Window model
 
-- **Root viewport**: borderless + transparent + always-on-top + not in the taskbar. Every frame it measures the content and sends `ViewportCommand::InnerSize` to **hug the content**, so there is no wasted transparent area.
-- **Text window**: a click-through Win32 layered window follows the root position and size. GDI draws metrics with per-pixel alpha while the root window provides the translucent panel and the same layout with invisible text.
-- **Menu viewport**: created on right-click via `show_viewport_deferred` as its own window (`decorations=false`, transparent, always-on-top), tightly fitted; the main window size is unaffected. The menu is a two-level structure.
+- **One window for everything.** A borderless `WS_POPUP` window with `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE` — always on top, never activated by a click, and never shown in the taskbar or Alt-Tab.
+- **Per-pixel alpha via GDI.** The panel background (a software rounded rectangle filled with the configured alpha) and the text (`DrawTextW`, `Microsoft YaHei`) are composited into a 32-bit top-down DIB. Any non-black pixel is forced to alpha 255 so the text stays crisp over the translucent panel. The DIB is handed to the compositor with a single `UpdateLayeredWindow(..., ULW_ALPHA)` call.
+- **Drag** is manual (`SetCapture` + `SetCursorPos`), **the menu** is the native muda menu shown with `show_context_menu_for_hwnd`, and **repaint** is triggered by `WM_APP_DATA` rather than a timer.
 
 ### 2.4 Module responsibilities
 
 | Module | Responsibility |
 | --- | --- |
-| `main.rs` | Parse `--dump`; self-elevate; create the window and start eframe |
-| `app.rs` | eframe `App` (`logic`/`ui`); layout rendering; window fitting; menu viewport and action draining |
-| `config.rs` | `Config` load/save, defaults, legacy-directory migration |
+| `main.rs` | Parse `--dump`; self-elevate; declare DPI awareness; own the `Overlay` instance and run the message loop |
+| `overlay.rs` | The whole UI: window creation, DPI handling, layout, GDI drawing, native menu, drag and message handling |
+| `config.rs` | `Config`/`Layout`/`Spacing`/`Align` load-save, defaults, legacy-directory migration |
 | `i18n.rs` | `Language`, string tables, system-language selection |
 | `format.rs` | Speed / percent / temperature formatting (including roll-over rules) |
 | `tray.rs` | Tray icon and menu; exposes `set_autostart_checked` |
 | `autostart.rs` | Manages the logon scheduled task via `schtasks` |
 | `elevate.rs` | `TokenElevation` check + `ShellExecuteW("runas")` self-elevation |
 | `diag.rs` | Timestamped diagnostic log |
-| `window.rs` | Win32 overlay/menu opacity, rounded regions, native window styles |
-| `text_window.rs` | Click-through layered window with per-pixel-alpha GDI metric text |
 | `metrics/mod.rs` | `Snapshot`, collector thread, percentage helpers |
 | `metrics/*.rs` | Individual collectors (net / cpu / mem / gpu / pawnio / temp) |
 
@@ -120,18 +116,19 @@ Modules come from [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Mod
 - **Self-elevation**: on startup `OpenProcessToken` + `TokenElevation` decides; if not elevated the app relaunches itself via `ShellExecuteW("runas")` (one UAC prompt). When started by the scheduled task it is already elevated, so no prompt.
 - **Autostart**: a logon scheduled task `deskpulse` is created with `schtasks` (`/SC ONLOGON /RL HIGHEST`), avoiding a UAC prompt at every logon. The in-app "Start with Windows" toggle manages that task.
 
-## 6. Window and layout
+## 6. Window, DPI and layout
 
-- **Content fitting**: each frame takes the content rect, compares it with the previous size and only sends `InnerSize` past a threshold, avoiding jitter.
-- **Transparency with WARP**: the D3D12 surface reports only opaque alpha modes on the tested machine. Win32 layered-window opacity makes the panel translucent. A separate click-through Win32 window draws the metric text with GDI into a per-pixel-alpha bitmap, keeping the text opaque. Rounded window regions clip the panel and menu corners.
-- **Fixed cells**: labels/values use fixed-width boxes (tight 46 / 74, loose 46 / 92), so digit changes do not change the window width.
-- **Alignment**: in tight mode the first column's label is right-aligned and its value left-aligned; the two-column layout's second-column labels are left-aligned (their left edges line up). Aligned layouts force the box width with `set_min_width`, otherwise the box shrinks to the text and the column drifts.
-- **Spacing preset**: `item_spacing.x = 0`; the 4pt label↔value gap is added explicitly inside a cell; there is no gap between the two columns.
-- **Menu**: a deferred viewport with dark `Visuals` + near-black background and near-white text (not tied to the system theme), two-level structure; actions are passed back through an `Arc<Mutex<MenuState>>` queue that the parent drains every frame.
+- **DPI awareness first.** Before any window exists, `main.rs` calls `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` (falling back to `SetProcessDPIAware`). Without this Windows bitmap-stretches the window and blurs the text. `GetDpiForWindow` then yields the real DPI (`144` at 150%), and `WM_DPICHANGED` re-scales, moves to the OS-suggested rectangle and rebuilds the fonts and DIB when the window crosses to another monitor.
+- **Content fitting by measurement.** All geometry is derived from `scale = dpi / 96`. The name and value column widths are the maximum of the strings actually drawn, measured with `GetTextExtentPoint32W` in a scratch DC; the panel is then exactly `margin + label + gap + value + margin` wide, so there is no wasted transparent area.
+- **Jitter control.** The panel grows immediately when a value needs more room but only shrinks once the content is more than `10` logical pixels narrower. A previous value therefore does not make the edge twitch every tick.
+- **Point-based gap.** The name↔value gap is defined in typographic points (`PT = 96/72` logical units) and rounded **up** to a whole pixel, so it is a physical 2 pt on every monitor regardless of resolution and scaling.
+- **Whole-pixel geometry.** Every rectangle and the panel size are integers, so the spans and the panel always agree (no 1 px clipping) and the rows fall on the pixel grid, which keeps GDI text crisp.
+- **Alignment and spacing.** `align` maps to `DrawTextW` flags (`left`/`center`/`right`) for the name and value inside each cell. `spacing` sets the vertical gap between rows (tight 1 / loose 2 logical units).
+- **Opacity.** The panel is filled with `opacity * 255` as its alpha; the metric text is forced opaque, so the numbers stay high-contrast even on a light desktop.
 
 ## 7. Configuration and migration
 
-- Path `%APPDATA%\deskpulse\config.toml`; `#[serde(default)]` fills missing fields with defaults.
+- Path `%APPDATA%\deskpulse\config.toml`; `#[serde(default)]` fills missing fields with defaults, so new options (like `align`) do not break an existing file.
 - On first run, if the new path is missing, the app reads the old path `%APPDATA%\desk-stats\config.toml` and migrates it (the project used to be named `desk-stats`).
 - `language` is an `Option`: when unset it is chosen from the system UI language (`GetUserDefaultUILanguage`).
 
@@ -143,10 +140,11 @@ Modules come from [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Mod
 
 ## 9. Key trade-offs
 
-1. **CPU temperature moved from WMI to a direct PawnIO read.** Newer LibreHardwareMonitor (0.9.x) removed the WMI provider, so the old `root\LibreHardwareMonitor` approach no longer works; going further, to drop the dependency on a resident app we read the PawnIO driver directly. LHM HTTP is only a fallback.
-2. **GPU uses NVML only.** No generic PDH fallback; non-NVIDIA GPUs show `--`.
-3. **No custom driver, no embedded hidden helper.** The first is too costly to maintain; the second is treated as malware by AV.
-4. **Unknown means `--`.** Never substitute `0`.
+1. **The GUI was rewritten from `egui` / `wgpu` to a native Win32/GDI window.** The framework dragged in a GPU API and rendered every frame; on the dev machine the same overlay used a 125 MB working set with the OpenGL backend and 420 MB with WARP, at 3–40× the CPU. Drawing one small DIB by hand and pushing it with `UpdateLayeredWindow` costs ≈ 27 MB private / ≈ 43 MB working set and ≈ 0.29 % of one core, and it runs where no GPU API exists at all (Basic Display adapter, VMs, RDP).
+2. **CPU temperature moved from WMI to a direct PawnIO read.** Newer LibreHardwareMonitor (0.9.x) removed the WMI provider, so the old `root\LibreHardwareMonitor` approach no longer works; going further, to drop the dependency on a resident app we read the PawnIO driver directly. LHM HTTP is only a fallback.
+3. **GPU uses NVML only.** No generic PDH fallback; non-NVIDIA GPUs show `--`.
+4. **No custom driver, no embedded hidden helper.** The first is too costly to maintain; the second is treated as malware by AV.
+5. **Unknown means `--`.** Never substitute `0`.
 
 ## 10. Known limitations / not done
 

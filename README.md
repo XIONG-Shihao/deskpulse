@@ -9,9 +9,9 @@ A pure-Rust Windows desktop overlay that shows live system status:
 - Memory usage
 - GPU usage, VRAM and GPU temperature (NVIDIA)
 
-Extras: three layouts (vertical / horizontal / two-column), two spacing presets, selectable metrics, Chinese/English, system tray, launch at logon, persistent configuration.
+Extras: three layouts (vertical / horizontal / two-column), two spacing presets, left/center/right text alignment, selectable metrics, Chinese/English, system tray, launch at logon, persistent configuration.
 
-Tech stack: pure Rust (GUI via `egui` / `eframe`), Windows WARP software rendering, no C++ runtime, single-file exe.
+Tech stack: pure Rust, drawn on a native Win32 layered window with GDI. **No GPU API** (no OpenGL / Direct3D / Vulkan) and no C++ runtime, shipped as a single-file exe.
 
 > Tech stack, architecture and trade-offs: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -21,20 +21,20 @@ Tech stack: pure Rust (GUI via `egui` / `eframe`), Windows WARP software renderi
 cargo run --release
 ```
 
-A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu (top level: Show / Layout / Spacing / Language / Start with Windows / Quit; the first four expand into submenus). The tray menu offers the same actions.
+A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu (Show / Layout / Spacing / Align / Language / Start with Windows / Quit; the first five expand into submenus). The tray menu offers the same actions.
 
 ### UI behaviour
 
-- **The window hugs its content**: every frame measures the content and resizes the window to it, so there is no wasted transparent area and no stray click region.
-- **Fixed cell widths**: changing digit counts (`9.9 KB/s` → `1.02 MB/s`) does not make the window width jitter.
-- **Right-click popup menu**: the menu is its own small window (two-level hierarchy), tightly fitted with no wasted transparent area; the main window keeps its data size. Close it by choosing an item, right-clicking again, clicking outside, pressing Esc, or losing focus.
-- **Dark theme**: a high-contrast dark palette is forced (near-black background, near-white text), independent of the system light theme.
-- **CPU rendering**: the panel and settings menu use the Windows WARP software adapter through Direct3D 12. A native Win32 layered window draws the metric text with GDI, keeping it opaque over the translucent panel. The UI does not use the NVIDIA or AMD GPU. GPU statistics still query NVML when available.
-- **Metric font**: Microsoft YaHei at 14 logical pixels, requested GDI weight 600, without an added bold style. Labels and values use the same opaque style.
-- **Selectable metrics**: tick items under "Show"; hidden items take no space and the window shrinks accordingly.
-- **Chinese/English**: on first run the language is chosen from the Windows UI language (English systems → English, otherwise Chinese); switch anytime under "Language".
+- **The panel hugs its content**: the name and value columns are sized from the measured text width (`GetTextExtentPoint32W`), so the panel is exactly as wide as its widest row and there is no wasted transparent area or stray click region.
+- **No width jitter**: the panel grows the moment a value needs more room, but only shrinks once the content is clearly narrower, so changing digits do not make the edge twitch.
+- **DPI aware**: the process declares per-monitor-v2 DPI awareness. The panel and fonts are laid out at the monitor's native pixel grid, and everything re-scales when the window is dragged to a monitor with a different scaling factor.
+- **Point-based gap**: the name↔value gap is a physical 2 pt (rounded up to a whole pixel), so it keeps the same physical size at any resolution and display scaling.
+- **Text alignment**: left / center / right, applied to each metric's name and value inside its cell.
 - **Three layouts**: vertical (one item per row), horizontal (all items in one row), two-column (two items per row; default order Up/Down, CPU/CPU T, Mem/GPU, VRAM/GPU T).
-- **Two spacing presets**: tight (default) uses narrow cells with labels right-aligned and values left-aligned, a ~4pt label↔value gap and no gap between the two columns; loose is the original centered wide cells (~47pt).
+- **Two spacing presets**: tight / loose — the vertical gap between rows.
+- **Dark and translucent**: near-black panel with a configurable alpha (default `0.72`); the metric text always stays opaque.
+- **Selectable metrics**: tick items under "Show"; hidden items take no space and the panel shrinks accordingly.
+- **Chinese/English**: on first run the language follows the Windows UI language (English systems → English, otherwise Chinese); switch anytime under "Language".
 - **Speed format**: at most 3 integer digits and 1 decimal (`5.9 KB/s`, `999.9 KB/s`); when the integer part is 0, 2 decimals (`0.98 KB/s`); more than 3 integer digits rolls over to the next unit (`1023.9 KB/s` → `1.00 MB/s`).
 
 Diagnostic mode (no window, prints 5 samples and exits):
@@ -42,6 +42,36 @@ Diagnostic mode (no window, prints 5 samples and exits):
 ```powershell
 cargo run -- --dump
 ```
+
+## Performance
+
+Measured on the development machine, with the desktop otherwise idle:
+
+| Test machine | |
+| --- | --- |
+| CPU | AMD Ryzen 5 9600X (6 cores / 12 threads) |
+| Memory | 31 GB |
+| OS | Windows 11, **150 %** display scaling |
+| Overlay | 6 metrics shown, 1 s refresh |
+
+| Overlay cost | Value |
+| --- | --- |
+| CPU | **≈ 0.29 % of one core** (≈ 0.02 % of the whole CPU) |
+| Private memory | **≈ 27 MB** |
+| Working set | ≈ 43 MB |
+| Threads | 4–7 |
+| Handles | ≈ 290 |
+| `deskpulse.exe` | **0.97 MB** |
+
+That is roughly **3 ms of CPU time per second** — effectively invisible in Task Manager, and far below a single frame of a typical animated UI.
+
+Why it is this cheap:
+
+- **Nothing renders unless the data changes.** The sampler thread posts a message after each new snapshot (once per second by default); the window redraws only then. There is no continuous render loop and no animation.
+- **The whole panel is one small bitmap.** The background and the text are composited into a ~160×180 px 32-bit DIB in ordinary memory and handed to Windows with a single `UpdateLayeredWindow` call.
+- **No GPU API at all.** The UI never touches OpenGL / Direct3D / Vulkan, so it also works on machines with only the Microsoft Basic Display adapter, inside virtual machines and over Remote Desktop.
+
+For comparison, the earlier `egui` / `wgpu` builds of the same overlay used ≈ 125 MB (OpenGL backend) and ≈ 420 MB (WARP backend) of working set, and an order of magnitude more CPU.
 
 ## Packaging a standalone exe
 
@@ -73,7 +103,7 @@ deskpulse/
 │   └── IntelMSR.bin         # PawnIO module (Intel MSR)
 └── src/
     ├── main.rs              # entry, --dump diagnostic, self-elevation
-    ├── app.rs               # eframe App: UI, layout, menu, window fitting
+    ├── overlay.rs           # the whole Win32/GDI UI: window, layout, drawing, menu, input
     ├── config.rs            # config load/save + legacy-dir migration
     ├── i18n.rs              # zh/en strings + system-language detection
     ├── format.rs            # speed / percent / temperature formatting
@@ -81,8 +111,6 @@ deskpulse/
     ├── autostart.rs         # logon scheduled task (schtasks)
     ├── elevate.rs           # relaunch via UAC when not elevated
     ├── diag.rs              # %APPDATA%\deskpulse\diag.log
-    ├── window.rs            # native panel opacity, corners, and window styles
-    ├── text_window.rs       # opaque metric text in a click-through GDI layer
     └── metrics/
         ├── mod.rs           # Snapshot + collector thread + percentages
         ├── net.rs           # sysinfo network byte diff (filters virtual NICs)
@@ -100,7 +128,8 @@ Path: `%APPDATA%\deskpulse\config.toml`.
 | Field | Description |
 | --- | --- |
 | `layout` | `vertical`, `horizontal` or `grid` (two-column) |
-| `spacing` | `tight` (default) or `loose` |
+| `spacing` | `tight` (default) or `loose` — the vertical gap between rows |
+| `align` | `left` (default), `center` or `right` — text alignment inside each cell |
 | `position` | Top-left window position; saved after dragging |
 | `refresh_secs` | Sampling interval in seconds |
 | `opacity` | Panel alpha, 0.0–1.0; default `0.72` (translucent). Text stays opaque. |
@@ -122,12 +151,6 @@ gpu = false
 vram = false
 gpu_temp = false
 ```
-
-### `NORMAL` text over the overlay
-
-The stray `NORMAL` text appeared over both the overlay and its right-click menu in the former OpenGL build. It was not a deskpulse metric or text showing through the background. Turning off G-SYNC did not remove it, and its exact source was not identified.
-
-The new build uses the **Microsoft Basic Render Driver (WARP)** for the panel and menu, plus GDI for opaque metric text. On the reported machine, the user confirmed that `NORMAL` disappeared in this build. This identifies the old rendering path as the practical trigger, but does not establish which component drew the text. Fully quit the old process before launching the new executable.
 
 ## Metrics and data sources
 

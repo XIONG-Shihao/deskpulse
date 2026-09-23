@@ -9,16 +9,16 @@
 | 方面 | 选择 | 说明 |
 | --- | --- | --- |
 | 语言 | Rust，edition 2024 | 只做 Windows（`x86_64-pc-windows-msvc`） |
-| GUI | `eframe` / `egui` `0.36`（wgpu、D3D12 WARP 后端） | 立即模式 GUI；CPU 软件渲染、无边框、透明、置顶窗口 |
+| 界面 | 原生 Win32 分层窗口 + GDI，手写 FFI | 逐像素 alpha 的 `UpdateLayeredWindow`；不用任何 GPU API，也不用 GUI 框架 |
 | 网络 / CPU / 内存 | `sysinfo` `0.39` | 网卡累计字节、CPU 占用、内存 |
 | GPU | `nvml-wrapper` `0.13` | NVIDIA NVML：占用 / 显存 / 温度（运行时动态加载 `nvml.dll`） |
 | CPU 温度（主） | PawnIO 内核驱动 + 手写 FFI | 无第三方 Rust 封装，直接用 `CreateFile` / `DeviceIoControl` |
 | CPU 温度（退路） | `serde_json` + 标准库 `TcpStream` | 轮询 LibreHardwareMonitor 的 `http://127.0.0.1:8085/data.json` |
-| 托盘 / 菜单 | `tray-icon` `0.25`（内部用 muda） | 托盘图标与原生菜单 |
+| 托盘 / 菜单 | `tray-icon` `0.25`（内部用 muda） | 托盘图标与原生右键菜单 |
 | 配置 | `serde` + `toml` | `%APPDATA%\deskpulse\config.toml` |
 | 开机自启 | `schtasks.exe` | 计划任务，`RunLevel Highest` |
 | 打包 | `winresource`、`+crt-static`、LTO | 图标/版本信息、免 VC++ 运行时、单文件 exe |
-| 中文显示 | 运行时加载系统字体 | egui 不自带 CJK 字形 |
+| 中文显示 | `CreateFontW` 加载 `Microsoft YaHei` | GDI 直接渲染 CJK，无需内置字形 |
 
 设计原则：尽量少依赖；可能拿不到的指标一律用 `Option`，UI 显示 `--`，**绝不用 `0` 冒充未知**。
 
@@ -27,52 +27,48 @@
 ### 2.1 线程模型
 
 ```
-主线程 (eframe/winit 事件循环)
-├── 根视口：悬浮窗（数据展示）
-├── Win32 分层窗口：不透明数据文字（鼠标穿透）
-├── 延迟视口：右键设置菜单（独立小窗口）
-└── App::logic 每帧：回收菜单动作、处理托盘事件、请求重绘
+主线程 —— Win32 消息循环（GetMessageW / DispatchMessageW）
+├── 拥有分层窗口：负责布局、把内容画进位图、处理输入与菜单
+└── 收到 WM_APP_DATA 时重绘面板；收到 WM_APP_MENU 时执行菜单动作
 
-采集线程 (1 个)
-└── 周期性采样 → 写入 Arc<Mutex<Snapshot>>
+采集线程（1 个）
+└── 每 refresh_secs 采样一次 → 写入 Arc<Mutex<Snapshot>> → PostMessageW(WM_APP_DATA)
 
-菜单事件线程 (1 个)
-└── 阻塞在 MenuEvent::recv()，收到即入队并 ctx.request_repaint()
+muda / 托盘事件线程（由 tray-icon 持有）
+└── MenuEvent 回调 → 把 id 入队 → PostMessageW(WM_APP_MENU)
 ```
 
-- **采集与 UI 解耦**：系统调用只在采集线程里做；UI 每帧只读取一份快照，避免每帧查询。
-- **菜单事件即时唤醒**：托盘菜单事件若只在 `logic` 里轮询，最多要等一个重绘周期（~400ms）；监听线程用 `request_repaint()` 立刻唤醒，退出/切换操作即时生效。
-- **UI 在 CPU 上栅格化**：`main.rs` 将 wgpu 限定为 Direct3D 12，并只选择标记为 `DeviceType::Cpu` 的适配器（Windows WARP）。三个窗口共用该渲染器。没有可用的软件适配器时启动失败，不会回退到硬件 GPU。
+- **采集与 UI 解耦**：系统调用只在采集线程里做；UI 被唤醒时只 clone 一份快照。
+- **事件驱动，没有渲染循环**：采集线程每采到新数据就发 `WM_APP_DATA`，面板因此每个周期只重绘一次，其余时间什么都不做。
+- **菜单事件只入队、不就地处理**：muda 在自己的线程回调，所以回调里只把 id 推入 `Arc<Mutex<Vec<String>>>` 并发 `WM_APP_MENU`；所有 UI 状态都由主线程独占。
 
 ### 2.2 数据流
 
 ```
-各 Collector ──sample()──► Snapshot ──(Arc<Mutex>)──► App::ui 每帧 clone 渲染
+各 Collector ──sample()──► Snapshot ──(Arc<Mutex>)──► refresh() 每周期 clone 一次
 ```
 
 `Snapshot` 汇总 8 个指标，每个都是 `Option`（拿不到即 `None`）。百分比、显存占比等在 UI 侧由原始值计算。
 
-### 2.3 视口模型
+### 2.3 窗口模型
 
-- **根视口**：无边框 + 透明 + 置顶 + 不进任务栏的悬浮窗。每帧测量内容尺寸并用 `ViewportCommand::InnerSize` **贴合内容**，所以没有多余透明区域。
-- **文字窗口**：可穿透鼠标的 Win32 分层窗口跟随根视口的位置与大小。GDI 通过逐像素 alpha 绘制数据文字；根窗口绘制半透明面板，并用不可见文字保留相同布局。
-- **菜单视口**：右键时创建 `show_viewport_deferred` 独立窗口（`decorations=false`、透明、置顶），紧贴菜单内容；主窗口大小不受影响。菜单是一棵二级结构。
+- **一切都用一个窗口**：无边框 `WS_POPUP`，扩展样式 `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE` —— 置顶、点击不抢焦点、不进任务栏和 Alt-Tab。
+- **GDI 逐像素 alpha**：面板背景（用代码绘制的圆角矩形，填成配置的透明度）和文字（`DrawTextW` + `Microsoft YaHei`）都合成到一张 32 位从上到下的 DIB 上。任何非黑像素一律强制 alpha 255，保证文字在半透明面板上依然锐利。最后用一次 `UpdateLayeredWindow(..., ULW_ALPHA)` 把 DIB 交给合成器。
+- **拖动**用手动 `SetCapture` + `SetCursorPos`；**菜单**用 muda 的原生菜单，通过 `show_context_menu_for_hwnd` 弹出；**重绘**由 `WM_APP_DATA` 触发，而不是定时器。
 
 ### 2.4 模块职责
 
 | 模块 | 职责 |
 | --- | --- |
-| `main.rs` | 解析 `--dump`；自提权；创建窗口并启动 eframe |
-| `app.rs` | eframe `App`（`logic`/`ui`）；布局渲染；窗口自适应；菜单视口与动作回收 |
-| `config.rs` | `Config` 读写、缺省值、旧目录迁移 |
+| `main.rs` | 解析 `--dump`；自提权；声明 DPI 感知；持有 `Overlay` 实例并跑消息循环 |
+| `overlay.rs` | 整个界面：创建窗口、处理 DPI、布局、GDI 绘制、原生菜单、拖动与消息处理 |
+| `config.rs` | `Config`/`Layout`/`Spacing`/`Align` 读写、缺省值、旧目录迁移 |
 | `i18n.rs` | `Language`、文案表、按系统语言选择 |
 | `format.rs` | 速率 / 百分比 / 温度格式化（含进位规则） |
 | `tray.rs` | 托盘图标与菜单，暴露 `set_autostart_checked` |
 | `autostart.rs` | 用 `schtasks` 管理登录计划任务 |
 | `elevate.rs` | `TokenElevation` 检测 + `ShellExecuteW("runas")` 自提权 |
 | `diag.rs` | 带时间戳的诊断日志 |
-| `window.rs` | Win32 面板/菜单透明度、圆角区域和原生窗口样式 |
-| `text_window.rs` | 用逐像素 alpha 的 GDI 绘制数据文字的鼠标穿透分层窗口 |
 | `metrics/mod.rs` | `Snapshot`、采集线程、百分比计算 |
 | `metrics/*.rs` | 各指标采集器（net / cpu / mem / gpu / pawnio / temp） |
 
@@ -120,18 +116,19 @@ Windows 没有可靠的公开 CPU 温度 API。核心温度只能读 **MSR**（I
 - **自提权**：启动时用 `OpenProcessToken` + `TokenElevation` 判断；未提权则 `ShellExecuteW("runas")` 重启自己（弹一次 UAC）。计划任务启动时已是管理员，不会再弹。
 - **自启**：用 `schtasks` 建登录计划任务 `deskpulse`（`/SC ONLOGON /RL HIGHEST`），免去每次登录的 UAC。app 内「开机自启」开关即管理该任务。
 
-## 6. 窗口与布局
+## 6. 窗口、DPI 与布局
 
-- **贴合内容**：每帧取内容矩形，与上次尺寸比较，差异超过阈值才发 `InnerSize`，避免抖动。
-- **WARP 下的透明效果**：测试机器的 D3D12 表面只支持不透明 alpha 模式。使用 Win32 分层窗口不透明度使面板半透明；另一个可穿透鼠标的 Win32 窗口用 GDI 将数据文字绘制到逐像素 alpha 位图上，保持文字不透明。圆角窗口区域裁剪面板和菜单的边角。
-- **固定单元格**：标签/数值用固定宽度的框（紧凑 46 / 74，宽松 46 / 92），数字位数变化不会改变窗口宽度。
-- **对齐**：紧凑模式下第一列标签右对齐、数值左对齐；竖两排的第二列标签左对齐（各自左边缘对齐）。对齐布局用 `set_min_width` 强制框宽，否则会缩到文字宽度导致列漂移。
-- **间距预设**：`item_spacing.x = 0`，标签↔数值的 4pt 在单元格内显式添加；竖两排两列之间无间隔。
-- **菜单**：延迟视口，深色 `Visuals` + 近黑底近白字（不依赖系统主题），二级结构；动作通过 `Arc<Mutex<MenuState>>` 队列回传，父级每帧回收。
+- **先声明 DPI 感知**：在任何窗口创建之前，`main.rs` 调用 `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`（失败回退 `SetProcessDPIAware`）。不做这一步 Windows 会把窗口位图整体拉伸，文字就会糊。之后 `GetDpiForWindow` 才能拿到真实 DPI（150% 时为 `144`），并由 `WM_DPICHANGED` 在窗口跨到不同显示器时重新缩放、移动到系统建议的矩形并重建字体与位图。
+- **按实测文字宽度贴合内容**：所有几何都由 `scale = dpi / 96` 推导。名称列和数值列的宽度取实际要绘制的字符串中最宽的一个，用临时 DC 的 `GetTextExtentPoint32W` 量出来；面板宽度正好是 `边距 + 名称列 + 间距 + 数值列 + 边距`，没有多余透明区。
+- **抖动控制**：数值需要更多空间时立刻撑开，但只有内容明显变窄（超过 `10` 逻辑像素）才收缩，因此上一次的值不会让边缘每周期抖一下。
+- **按「点」定义的间距**：名称↔数值间距定义在印刷点（`PT = 96/72` 逻辑单位），并**向上取整**到整像素，所以在任何分辨率与缩放下都是物理 2pt。
+- **全整数几何**：所有矩形和面板尺寸都用整数像素，保证文字矩形与面板尺寸一致（不会出现 1px 裁切），行也落在像素网格上，GDI 文字更锐利。
+- **对齐与间距**：`align` 映射为 `DrawTextW` 的对齐标志（`left`/`center`/`right`），作用于单元格内的名称和数值；`spacing` 控制行与行之间的垂直间距（紧凑 1 / 宽松 2 逻辑单位）。
+- **透明度**：面板填充时以 `opacity * 255` 作为 alpha，数据文字强制不透明，因此即使桌面是浅色，数字也保持高对比。
 
 ## 7. 配置与迁移
 
-- 路径 `%APPDATA%\deskpulse\config.toml`；`#[serde(default)]` 保证字段缺失时用默认值。
+- 路径 `%APPDATA%\deskpulse\config.toml`；`#[serde(default)]` 保证字段缺失时用默认值，所以新增选项（如 `align`）不会破坏旧配置文件。
 - 首次运行若新路径不存在，会尝试读取旧路径 `%APPDATA%\desk-stats\config.toml` 并迁移（项目曾用名 `desk-stats`）。
 - `language` 为 `Option`：未设置时按系统 UI 语言（`GetUserDefaultUILanguage`）选择。
 
@@ -143,10 +140,11 @@ Windows 没有可靠的公开 CPU 温度 API。核心温度只能读 **MSR**（I
 
 ## 9. 关键取舍记录
 
-1. **CPU 温度从 WMI 改为 PawnIO 直读。** 新版 LibreHardwareMonitor（0.9.x）移除了 WMI provider，原 `root\LibreHardwareMonitor` 方案已失效；进一步地，为了摆脱对常驻 app 的依赖，改为直连 PawnIO 驱动。LHM HTTP 仅作退路。
-2. **GPU 只走 NVML。** 未实现 PDH 通用退路，非 NVIDIA 显卡相关项显示 `--`。
-3. **不做自研驱动、不内嵌隐藏检测程序。** 前者成本/维护过高，后者会被杀软视为恶意行为。
-4. **未知即 `--`。** 不用 `0` 冒充。
+1. **界面从 `egui` / `wgpu` 重写为原生 Win32/GDI 窗口。** 原框架会拖入 GPU API 并且每帧都渲染；同一悬浮窗在开发机上用 OpenGL 后端工作集约 125 MB、WARP 后端约 420 MB，CPU 高 3–40 倍。改成自己画一张小 DIB、再用 `UpdateLayeredWindow` 交给系统后，约 27 MB 私有内存 / 43 MB 工作集、约 0.29% 单核，而且在完全没有 GPU API 的环境（基本显示适配器、虚拟机、远程桌面）也能跑。
+2. **CPU 温度从 WMI 改为 PawnIO 直读。** 新版 LibreHardwareMonitor（0.9.x）移除了 WMI provider，原 `root\LibreHardwareMonitor` 方案已失效；进一步地，为了摆脱对常驻 app 的依赖，改为直连 PawnIO 驱动。LHM HTTP 仅作退路。
+3. **GPU 只走 NVML。** 未实现 PDH 通用退路，非 NVIDIA 显卡相关项显示 `--`。
+4. **不做自研驱动、不内嵌隐藏检测程序。** 前者成本/维护过高，后者会被杀软视为恶意行为。
+5. **未知即 `--`。** 不用 `0` 冒充。
 
 ## 10. 已知限制 / 未做
 
