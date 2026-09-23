@@ -23,44 +23,6 @@ cargo run --release
 
 运行后在桌面出现悬浮窗，鼠标拖动可移动。**右键**打开设置菜单（显示数据 / 布局 / 间距 / 对齐 / 语言 / 开机自启 / 退出，前五项展开为子菜单）。托盘图标菜单同样可操作。
 
-### 界面行为
-
-- **面板贴合内容**：名称列和数值列按实测文字宽度（`GetTextExtentPoint32W`）确定，面板宽度正好等于最宽的一行，没有多余透明区，也不会占用不该占的鼠标区域。
-- **宽度不抖动**：数值变宽时立刻撑开，变窄时只有明显变窄才收缩，所以数字位数变化不会让边缘来回跳。
-- **DPI 感知**：进程声明 per-monitor-v2 DPI 感知，面板和字体按显示器原生像素网格排布；窗口拖到不同缩放的显示器时会自动重新适配。
-- **按「点」定义的间距**：名称↔数值间距是物理 2pt（向上取整到整像素），因此任何分辨率和缩放下物理尺寸恒定。
-- **文字对齐**：左 / 居中 / 右，作用于每个数据项单元格内的名称和数值。
-- **三种排列**：竖排（每行一项）、横排（一行所有项）、竖两排（每行两项，默认依次为 上传/下载、CPU/CPU温、内存/GPU、显存/GPU温）。
-- **两种间距**：紧凑 / 宽松 —— 控制行与行之间的垂直间距。
-- **深色半透明**：近黑面板，透明度可配置（默认 `0.72`）；数据文字始终保持不透明。
-- **可选指标**：菜单「显示数据」里逐项勾选，隐藏的项不占空间，面板会相应缩小。
-- **中英文**：首次运行按 Windows 显示语言自动选择（英文系统→English，其余→中文），可随时在「语言」切换。
-- **速度格式**：整数部分最多 3 位、小数 1 位（`5.9 KB/s`、`999.9 KB/s`）；整数部分为 0 时 2 位小数（`0.98 KB/s`）；超 3 位整数进位到下一单位（`1023.9 KB/s` → `1.00 MB/s`）。
-
-诊断模式（不打开窗口，打印 5 次采样后退出）：
-
-```powershell
-cargo run -- --dump
-```
-
-
-## 打包成独立 exe
-
-`cargo build --release` 产出的 `target\release\deskpulse.exe` 即为可分发的单文件程序：
-
-- **带应用图标与版本信息**：由 `build.rs` + `winresource` 嵌入 `assets/icon.ico`。
-- **不依赖 VC++ 运行时**：`.cargo\config.toml` 对 `x86_64-pc-windows-msvc` 开启 `+crt-static`。
-- **体积优化**：release 开启 `lto`、`codegen-units = 1`、`strip`、`panic = "abort"`。
-- **无控制台窗口**：release 构建带 `windows_subsystem = "windows"`。
-
-```powershell
-cargo build --release
-Copy-Item .\target\release\deskpulse.exe .\dist\deskpulse.exe
-```
-
-`dist\deskpulse.exe` 可直接双击运行或拷给别人。重新生成图标：`pwsh -File .\assets\make-icon.ps1`。
-
-
 ## 性能
 
 在开发机上实测（除悬浮窗外桌面处于空闲）：
@@ -91,6 +53,41 @@ Copy-Item .\target\release\deskpulse.exe .\dist\deskpulse.exe
 
 对比：同一悬浮窗此前的 `egui` / `wgpu` 构建工作集约 **125 MB**（OpenGL 后端）和 **420 MB**（WARP 后端），CPU 也高一个数量级。
 
+## 界面行为
+
+- **面板贴合内容**：名称列和数值列按实测文字宽度（`GetTextExtentPoint32W`）确定，面板宽度正好等于最宽的一行，没有多余透明区，也不会占用不该占的鼠标区域。
+- **宽度不抖动**：数值变宽时立刻撑开，变窄时只有明显变窄才收缩，所以数字位数变化不会让边缘来回跳。
+- **DPI 感知**：进程声明 per-monitor-v2 DPI 感知，面板和字体按显示器原生像素网格排布；窗口拖到不同缩放的显示器时会自动重新适配。
+- **按「点」定义的间距**：名称↔数值间距是物理 2pt（向上取整到整像素），因此任何分辨率和缩放下物理尺寸恒定。
+- **文字对齐**：左 / 居中 / 右，作用于每个数据项单元格内的名称和数值。
+- **三种排列**：竖排（每行一项）、横排（一行所有项）、竖两排（每行两项，默认依次为 上传/下载、CPU/CPU温、内存/GPU、显存/GPU温）。
+- **两种间距**：紧凑 / 宽松 —— 控制行与行之间的垂直间距。
+- **深色半透明**：近黑面板，透明度可配置（默认 `0.72`）；数据文字始终保持不透明。
+- **可选指标**：菜单「显示数据」里逐项勾选，隐藏的项不占空间，面板会相应缩小。
+- **中英文**：首次运行按 Windows 显示语言自动选择（英文系统→English，其余→中文），可随时在「语言」切换。
+- **速度格式**：整数部分最多 3 位、小数 1 位（`5.9 KB/s`、`999.9 KB/s`）；整数部分为 0 时 2 位小数（`0.98 KB/s`）；超 3 位整数进位到下一单位（`1023.9 KB/s` → `1.00 MB/s`）。
+
+诊断模式（不打开窗口，打印 5 次采样后退出）：
+
+```powershell
+cargo run -- --dump
+```
+
+## 打包成独立 exe
+
+`cargo build --release` 产出的 `target\release\deskpulse.exe` 即为可分发的单文件程序：
+
+- **带应用图标与版本信息**：由 `build.rs` + `winresource` 嵌入 `assets/icon.ico`。
+- **不依赖 VC++ 运行时**：`.cargo\config.toml` 对 `x86_64-pc-windows-msvc` 开启 `+crt-static`。
+- **体积优化**：release 开启 `lto`、`codegen-units = 1`、`strip`、`panic = "abort"`。
+- **无控制台窗口**：release 构建带 `windows_subsystem = "windows"`。
+
+```powershell
+cargo build --release
+Copy-Item .\target\release\deskpulse.exe .\dist\deskpulse.exe
+```
+
+`dist\deskpulse.exe` 可直接双击运行或拷给别人。重新生成图标：`pwsh -File .\assets\make-icon.ps1`。
 
 ## 文件结构
 

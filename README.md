@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-A pure-Rust Windows desktop overlay that run on pure x64 CPU shows live system status:
+A pure-Rust Windows desktop overlay that runs entirely on the CPU and shows live system status:
 
 - Upload / download speed
 - CPU usage + CPU temperature
@@ -53,8 +53,7 @@ Why it is this cheap:
 
 For comparison, the earlier `egui` / `wgpu` builds of the same overlay used ≈ 125 MB (OpenGL backend) and ≈ 420 MB (WARP backend) of working set, and an order of magnitude more CPU.
 
-
-### UI behaviour
+## UI behaviour
 
 - **The panel hugs its content**: the name and value columns are sized from the measured text width (`GetTextExtentPoint32W`), so the panel is exactly as wide as its widest row and there is no wasted transparent area or stray click region.
 - **No width jitter**: the panel grows the moment a value needs more room, but only shrinks once the content is clearly narrower, so changing digits do not make the edge twitch.
