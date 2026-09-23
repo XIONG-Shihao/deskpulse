@@ -739,7 +739,7 @@ impl eframe::App for DeskStatsApp {
         // Keep the window out of the taskbar: eframe ignores with_taskbar(false)
         // and winit re-applies its styles on show, so this runs every frame.
         if let Some(hwnd) = window_hwnd(frame) {
-            crate::window::ensure_tool_window(hwnd);
+            crate::window::ensure_overlay_style(hwnd);
         }
 
         if let Some(rect) = ctx.input(|input| input.viewport().outer_rect) {

@@ -1,6 +1,14 @@
 //! Small Win32 window helpers.
 
+const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
+
+const WS_CAPTION: isize = 0x00C0_0000;
+const WS_THICKFRAME: isize = 0x0004_0000;
+const WS_SYSMENU: isize = 0x0008_0000;
+const WS_MINIMIZEBOX: isize = 0x0002_0000;
+const WS_MAXIMIZEBOX: isize = 0x0001_0000;
+
 const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
 const WS_EX_APPWINDOW: isize = 0x0004_0000;
 
@@ -25,23 +33,33 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-/// Keeps the window out of the taskbar (and Alt+Tab) by giving it the tool
-/// window style.
+/// Enforces the overlay's native window style:
+/// - hidden from the taskbar and Alt+Tab (`WS_EX_TOOLWINDOW`, no `WS_EX_APPWINDOW`)
+/// - no title bar or system buttons (`WS_CAPTION`, `WS_SYSMENU`, min/max, frame)
 ///
-/// `eframe` does not forward `ViewportBuilder::with_taskbar` to winit, so the
-/// window would show in the taskbar; winit also re-applies its own styles when
-/// the window is shown, which reverts a one-off change. Hence this is called
-/// every frame and only touches the window when the style is wrong.
-pub fn ensure_tool_window(hwnd: isize) {
+/// eframe does not forward `ViewportBuilder::with_taskbar` / `with_decorations`
+/// to winit, and winit re-applies its own styles when the window is shown, so
+/// this is called every frame and only touches the window when it is wrong.
+pub fn ensure_overlay_style(hwnd: isize) {
     // SAFETY: `hwnd` is a valid window handle from the running process.
     unsafe {
-        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let wanted = (current | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
-        if wanted == current {
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+
+        let wanted_ex = (ex_style | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
+        let wanted_style = style
+            & !(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+
+        if wanted_ex == ex_style && wanted_style == style {
             return;
         }
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
-        // The style change only takes effect after a frame change.
+        if wanted_ex != ex_style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted_ex);
+        }
+        if wanted_style != style {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, wanted_style);
+        }
+        // Style changes only take effect after a frame change.
         SetWindowPos(
             hwnd,
             0,
