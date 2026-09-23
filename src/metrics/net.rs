@@ -39,8 +39,11 @@ impl NetCollector {
             "bluetooth",
             "wsl",
         ];
-        let lower = name.to_ascii_lowercase();
-        !VIRTUAL_MARKERS.iter().any(|marker| lower.contains(marker))
+        let name = name.as_bytes();
+        !VIRTUAL_MARKERS.iter().any(|marker| {
+            name.windows(marker.len())
+                .any(|part| part.eq_ignore_ascii_case(marker.as_bytes()))
+        })
     }
 
     /// Returns `(upload_bps, download_bps)` in bytes per second.
@@ -70,5 +73,19 @@ impl NetCollector {
         let up = tx.saturating_sub(previous.tx) as f64 / dt;
         let down = rx.saturating_sub(previous.rx) as f64 / dt;
         (Some(up), Some(down))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NetCollector;
+
+    #[test]
+    fn physical_adapter_filter_keeps_previous_behavior() {
+        assert!(NetCollector::is_physical("Ethernet"));
+        assert!(NetCollector::is_physical("Wi-Fi"));
+        assert!(!NetCollector::is_physical("vEthernet (WSL)"));
+        assert!(!NetCollector::is_physical("VMware Network Adapter"));
+        assert!(!NetCollector::is_physical("BLUETOOTH Network Connection"));
     }
 }

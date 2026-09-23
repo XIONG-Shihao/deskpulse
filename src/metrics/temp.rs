@@ -169,20 +169,14 @@ fn raw_number(value: &Value) -> Option<f64> {
 }
 
 fn is_cpu(sensor_id: &str) -> bool {
-    sensor_id.starts_with("/intelcpu") || sensor_id.starts_with("/amdcpu") || sensor_id.starts_with("/cpu")
+    sensor_id.starts_with("/intelcpu")
+        || sensor_id.starts_with("/amdcpu")
+        || sensor_id.starts_with("/cpu")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    #[ignore = "requires a running LibreHardwareMonitor with the web server enabled"]
-    fn debug_live_lhm() {
-        let json = fetch_json(8085).expect("fetch_json failed");
-        eprintln!("json length = {}", json.len());
-        eprintln!("cpu temp = {:?}", cpu_temp_from_json(&json));
-    }
 
     #[test]
     fn parses_unit_suffixed_values() {
