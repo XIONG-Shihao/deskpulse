@@ -17,7 +17,7 @@ use tray_icon::menu::{
 };
 
 use crate::autostart::Autostart;
-use crate::config::{Config, Layout, Spacing};
+use crate::config::{Align, Config, Layout, Spacing};
 use crate::format;
 use crate::i18n::{Language, Text};
 use crate::metrics::{self, Shared, Snapshot};
@@ -739,6 +739,15 @@ impl Overlay {
         }
     }
 
+    /// `DrawTextW` flags selecting the configured text alignment.
+    fn align_dt(&self) -> u32 {
+        match self.config.align {
+            Align::Left => 0,
+            Align::Center => DT_CENTER,
+            Align::Right => DT_RIGHT,
+        }
+    }
+
     /// Rendered name↔value gap in whole physical pixels: 2pt rounded **up**, so
     /// it is never smaller than 2pt on any DPI.
     fn name_gap(&self) -> i32 {
@@ -785,7 +794,7 @@ impl Overlay {
         label_w: f32,
         value_w: f32,
     ) -> Vec<Span> {
-        let tight = self.config.spacing == Spacing::Tight;
+        let align = self.align_dt();
         let s = self.scale;
         let m = (MARGIN * s).round() as i32;
         let gap = self.name_gap();
@@ -831,7 +840,7 @@ impl Overlay {
                 // Name flush left, 2pt gap, value immediately after.
                 for (index, (label, value)) in rows.iter().enumerate() {
                     let y = m + index as i32 * (row_h + row_gap);
-                    cell(m, y, label, value, 0, 0);
+                    cell(m, y, label, value, align, align);
                 }
             }
             Layout::Grid => {
@@ -841,15 +850,7 @@ impl Overlay {
                     let line = (index / 2) as i32;
                     let y = m + line * (row_h + row_gap);
                     let x = m + column * cell_w;
-                    let label_align = if !tight {
-                        DT_CENTER
-                    } else if column == 1 {
-                        0
-                    } else {
-                        DT_RIGHT
-                    };
-                    let value_align = if tight { 0 } else { DT_CENTER };
-                    cell(x, y, label, value, label_align, value_align);
+                    cell(x, y, label, value, align, align);
                 }
             }
             Layout::Horizontal => {
@@ -864,7 +865,7 @@ impl Overlay {
                             right: x + col,
                             bottom: m + row_h,
                         },
-                        align: DT_CENTER,
+                        align,
                         color: 0x96_96_96,
                         value: false,
                     });
@@ -876,7 +877,7 @@ impl Overlay {
                             right: x + col,
                             bottom: m + 2 * row_h + gap,
                         },
-                        align: DT_CENTER,
+                        align,
                         color: 0x00FF_FFFF,
                         value: true,
                     });
@@ -1122,6 +1123,24 @@ impl Overlay {
         }
         let _ = menu.append(&spacing);
 
+        let align = Submenu::new(t.align, true);
+        for (id, label, selected) in [
+            ("align_left", t.align_left, self.config.align == Align::Left),
+            (
+                "align_center",
+                t.align_center,
+                self.config.align == Align::Center,
+            ),
+            (
+                "align_right",
+                t.align_right,
+                self.config.align == Align::Right,
+            ),
+        ] {
+            let _ = align.append(&CheckMenuItem::with_id(id, label, true, selected, None));
+        }
+        let _ = menu.append(&align);
+
         let language = Submenu::new(t.language, true);
         let _ = language.append(&CheckMenuItem::with_id(
             "lang_zh",
@@ -1169,6 +1188,9 @@ impl Overlay {
                 "layout_grid" => self.set_layout(Layout::Grid),
                 "spacing_loose" => self.set_spacing(Spacing::Loose),
                 "spacing_tight" => self.set_spacing(Spacing::Tight),
+                "align_left" => self.set_align(Align::Left),
+                "align_center" => self.set_align(Align::Center),
+                "align_right" => self.set_align(Align::Right),
                 "lang_zh" => self.set_language(Language::Zh),
                 "lang_en" => self.set_language(Language::En),
                 "autostart" => {
@@ -1219,6 +1241,15 @@ impl Overlay {
             return;
         }
         self.config.spacing = spacing;
+        self.config.save();
+        self.refresh();
+    }
+
+    fn set_align(&mut self, align: Align) {
+        if self.config.align == align {
+            return;
+        }
+        self.config.align = align;
         self.config.save();
         self.refresh();
     }

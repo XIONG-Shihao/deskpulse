@@ -24,6 +24,16 @@ pub enum Spacing {
     Tight,
 }
 
+/// How each metric's name and value are aligned inside their cell.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Align {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
 /// User settings persisted to `%APPDATA%\deskpulse\config.toml`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -31,6 +41,8 @@ pub struct Config {
     pub layout: Layout,
     /// Cell spacing preset.
     pub spacing: Spacing,
+    /// Alignment of the metric text inside each cell.
+    pub align: Align,
     /// Top-left window position in physical pixels, if it has been moved yet.
     pub position: Option<[f32; 2]>,
     /// Refresh interval for the metric sampler, in seconds.
@@ -51,6 +63,7 @@ impl Default for Config {
         Self {
             layout: Layout::Vertical,
             spacing: Spacing::Tight,
+            align: Align::Left,
             position: None,
             refresh_secs: 1,
             opacity: 0.72,
@@ -124,6 +137,7 @@ mod tests {
         let config = Config {
             layout: Layout::Horizontal,
             spacing: Spacing::Loose,
+            align: Align::Center,
             position: Some([12.0, 34.0]),
             refresh_secs: 2,
             opacity: 0.5,
@@ -135,6 +149,7 @@ mod tests {
         let text = toml::to_string_pretty(&config).unwrap();
         let back: Config = toml::from_str(&text).unwrap();
         assert_eq!(back.layout, Layout::Horizontal);
+        assert_eq!(back.align, Align::Center);
         assert_eq!(back.position, Some([12.0, 34.0]));
         assert_eq!(back.refresh_secs, 2);
         assert!(back.autostart);
@@ -146,6 +161,7 @@ mod tests {
     fn missing_fields_fall_back_to_defaults() {
         let back: Config = toml::from_str("layout = \"horizontal\"\n").unwrap();
         assert_eq!(back.layout, Layout::Horizontal);
+        assert_eq!(back.align, Align::Left);
         assert_eq!(back.refresh_secs, 1);
         assert!(back.position.is_none());
         assert!(back.language.is_none());
