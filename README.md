@@ -11,7 +11,7 @@ A pure-Rust Windows desktop overlay that shows live system status:
 
 Extras: three layouts (vertical / horizontal / two-column), two spacing presets, selectable metrics, Chinese/English, system tray, launch at logon, persistent configuration.
 
-Tech stack: pure Rust (GUI via `egui` / `eframe`), no C++ runtime, single-file exe.
+Tech stack: pure Rust (GUI via `egui` / `eframe`), Windows WARP software rendering, no C++ runtime, single-file exe.
 
 > Tech stack, architecture and trade-offs: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -29,6 +29,8 @@ A floating window appears on the desktop; drag it with the mouse. **Right-click*
 - **Fixed cell widths**: changing digit counts (`9.9 KB/s` → `1.02 MB/s`) does not make the window width jitter.
 - **Right-click popup menu**: the menu is its own small window (two-level hierarchy), tightly fitted with no wasted transparent area; the main window keeps its data size. Close it by choosing an item, right-clicking again, clicking outside, pressing Esc, or losing focus.
 - **Dark theme**: a high-contrast dark palette is forced (near-black background, near-white text), independent of the system light theme.
+- **CPU rendering**: the panel and settings menu use the Windows WARP software adapter through Direct3D 12. A native Win32 layered window draws the metric text with GDI, keeping it opaque over the translucent panel. The UI does not use the NVIDIA or AMD GPU. GPU statistics still query NVML when available.
+- **Metric font**: Microsoft YaHei at 14 logical pixels, requested GDI weight 600, without an added bold style. Labels and values use the same opaque style.
 - **Selectable metrics**: tick items under "Show"; hidden items take no space and the window shrinks accordingly.
 - **Chinese/English**: on first run the language is chosen from the Windows UI language (English systems → English, otherwise Chinese); switch anytime under "Language".
 - **Three layouts**: vertical (one item per row), horizontal (all items in one row), two-column (two items per row; default order Up/Down, CPU/CPU T, Mem/GPU, VRAM/GPU T).
@@ -47,7 +49,7 @@ cargo run -- --dump
 
 - **App icon and version info** embedded by `build.rs` + `winresource` from `assets/icon.ico`.
 - **No VC++ runtime dependency**: `.cargo\config.toml` enables `+crt-static` for `x86_64-pc-windows-msvc`.
-- **Size optimised**: release uses `lto`, `codegen-units = 1`, `strip`, `panic = "abort"`; about 5.9 MB.
+- **Size optimised**: release uses `lto`, `codegen-units = 1`, `strip`, `panic = "abort"`.
 - **No console window**: release builds use `windows_subsystem = "windows"`.
 
 ```powershell
@@ -79,6 +81,8 @@ deskpulse/
     ├── autostart.rs         # logon scheduled task (schtasks)
     ├── elevate.rs           # relaunch via UAC when not elevated
     ├── diag.rs              # %APPDATA%\deskpulse\diag.log
+    ├── window.rs            # native panel opacity, corners, and window styles
+    ├── text_window.rs       # opaque metric text in a click-through GDI layer
     └── metrics/
         ├── mod.rs           # Snapshot + collector thread + percentages
         ├── net.rs           # sysinfo network byte diff (filters virtual NICs)
@@ -99,7 +103,7 @@ Path: `%APPDATA%\deskpulse\config.toml`.
 | `spacing` | `tight` (default) or `loose` |
 | `position` | Top-left window position; saved after dragging |
 | `refresh_secs` | Sampling interval in seconds |
-| `opacity` | Background alpha, 0.0–1.0 |
+| `opacity` | Panel alpha, 0.0–1.0; default `0.72` (translucent). Text stays opaque. |
 | `autostart` | Launch at logon (maps to the `deskpulse` scheduled task) |
 | `lhm_port` | LibreHardwareMonitor HTTP port (fallback), default `8085` |
 | `language` | `zh` or `en`; empty means auto-detect from the system language on first run |
@@ -118,6 +122,12 @@ gpu = false
 vram = false
 gpu_temp = false
 ```
+
+### `NORMAL` text over the overlay
+
+The stray `NORMAL` text appeared over both the overlay and its right-click menu in the former OpenGL build. It was not a deskpulse metric or text showing through the background. Turning off G-SYNC did not remove it, and its exact source was not identified.
+
+The new build uses the **Microsoft Basic Render Driver (WARP)** for the panel and menu, plus GDI for opaque metric text. On the reported machine, the user confirmed that `NORMAL` disappeared in this build. This identifies the old rendering path as the practical trigger, but does not establish which component drew the text. Fully quit the old process before launching the new executable.
 
 ## Metrics and data sources
 

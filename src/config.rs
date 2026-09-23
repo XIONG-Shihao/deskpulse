@@ -3,8 +3,26 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::app::{Layout, Spacing};
 use crate::i18n::Language;
+
+/// Overlay layout, selectable from the menu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout {
+    Horizontal,
+    Grid,
+    #[default]
+    Vertical,
+}
+
+/// Cell spacing preset, selectable from the menu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Spacing {
+    Loose,
+    #[default]
+    Tight,
+}
 
 /// User settings persisted to `%APPDATA%\deskpulse\config.toml`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -98,7 +116,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::Layout;
 
     #[test]
     fn round_trips_all_fields() {
@@ -135,4 +152,3 @@ mod tests {
         assert!(back.visible.is_empty());
     }
 }
-

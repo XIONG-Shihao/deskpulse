@@ -9,7 +9,7 @@
 | 方面 | 选择 | 说明 |
 | --- | --- | --- |
 | 语言 | Rust，edition 2024 | 只做 Windows（`x86_64-pc-windows-msvc`） |
-| GUI | `eframe` / `egui` `0.36`（glow 后端） | 立即模式 GUI；无边框、透明、置顶窗口 |
+| GUI | `eframe` / `egui` `0.36`（wgpu、D3D12 WARP 后端） | 立即模式 GUI；CPU 软件渲染、无边框、透明、置顶窗口 |
 | 网络 / CPU / 内存 | `sysinfo` `0.39` | 网卡累计字节、CPU 占用、内存 |
 | GPU | `nvml-wrapper` `0.13` | NVIDIA NVML：占用 / 显存 / 温度（运行时动态加载 `nvml.dll`） |
 | CPU 温度（主） | PawnIO 内核驱动 + 手写 FFI | 无第三方 Rust 封装，直接用 `CreateFile` / `DeviceIoControl` |
@@ -29,6 +29,7 @@
 ```
 主线程 (eframe/winit 事件循环)
 ├── 根视口：悬浮窗（数据展示）
+├── Win32 分层窗口：不透明数据文字（鼠标穿透）
 ├── 延迟视口：右键设置菜单（独立小窗口）
 └── App::logic 每帧：回收菜单动作、处理托盘事件、请求重绘
 
@@ -41,6 +42,7 @@
 
 - **采集与 UI 解耦**：系统调用只在采集线程里做；UI 每帧只读取一份快照，避免每帧查询。
 - **菜单事件即时唤醒**：托盘菜单事件若只在 `logic` 里轮询，最多要等一个重绘周期（~400ms）；监听线程用 `request_repaint()` 立刻唤醒，退出/切换操作即时生效。
+- **UI 在 CPU 上栅格化**：`main.rs` 将 wgpu 限定为 Direct3D 12，并只选择标记为 `DeviceType::Cpu` 的适配器（Windows WARP）。三个窗口共用该渲染器。没有可用的软件适配器时启动失败，不会回退到硬件 GPU。
 
 ### 2.2 数据流
 
@@ -53,6 +55,7 @@
 ### 2.3 视口模型
 
 - **根视口**：无边框 + 透明 + 置顶 + 不进任务栏的悬浮窗。每帧测量内容尺寸并用 `ViewportCommand::InnerSize` **贴合内容**，所以没有多余透明区域。
+- **文字窗口**：可穿透鼠标的 Win32 分层窗口跟随根视口的位置与大小。GDI 通过逐像素 alpha 绘制数据文字；根窗口绘制半透明面板，并用不可见文字保留相同布局。
 - **菜单视口**：右键时创建 `show_viewport_deferred` 独立窗口（`decorations=false`、透明、置顶），紧贴菜单内容；主窗口大小不受影响。菜单是一棵二级结构。
 
 ### 2.4 模块职责
@@ -68,6 +71,8 @@
 | `autostart.rs` | 用 `schtasks` 管理登录计划任务 |
 | `elevate.rs` | `TokenElevation` 检测 + `ShellExecuteW("runas")` 自提权 |
 | `diag.rs` | 带时间戳的诊断日志 |
+| `window.rs` | Win32 面板/菜单透明度、圆角区域和原生窗口样式 |
+| `text_window.rs` | 用逐像素 alpha 的 GDI 绘制数据文字的鼠标穿透分层窗口 |
 | `metrics/mod.rs` | `Snapshot`、采集线程、百分比计算 |
 | `metrics/*.rs` | 各指标采集器（net / cpu / mem / gpu / pawnio / temp） |
 
@@ -118,7 +123,8 @@ Windows 没有可靠的公开 CPU 温度 API。核心温度只能读 **MSR**（I
 ## 6. 窗口与布局
 
 - **贴合内容**：每帧取内容矩形，与上次尺寸比较，差异超过阈值才发 `InnerSize`，避免抖动。
-- **固定单元格**：标签/数值用固定宽度的框（紧凑 40 / 74，宽松 46 / 92），数字位数变化不会改变窗口宽度。
+- **WARP 下的透明效果**：测试机器的 D3D12 表面只支持不透明 alpha 模式。使用 Win32 分层窗口不透明度使面板半透明；另一个可穿透鼠标的 Win32 窗口用 GDI 将数据文字绘制到逐像素 alpha 位图上，保持文字不透明。圆角窗口区域裁剪面板和菜单的边角。
+- **固定单元格**：标签/数值用固定宽度的框（紧凑 46 / 74，宽松 46 / 92），数字位数变化不会改变窗口宽度。
 - **对齐**：紧凑模式下第一列标签右对齐、数值左对齐；竖两排的第二列标签左对齐（各自左边缘对齐）。对齐布局用 `set_min_width` 强制框宽，否则会缩到文字宽度导致列漂移。
 - **间距预设**：`item_spacing.x = 0`，标签↔数值的 4pt 在单元格内显式添加；竖两排两列之间无间隔。
 - **菜单**：延迟视口，深色 `Visuals` + 近黑底近白字（不依赖系统主题），二级结构；动作通过 `Arc<Mutex<MenuState>>` 队列回传，父级每帧回收。
@@ -133,7 +139,7 @@ Windows 没有可靠的公开 CPU 温度 API。核心温度只能读 **MSR**（I
 
 - `build.rs` 用 `winresource` 嵌入 `assets/icon.ico` 与版本信息。
 - `.cargo/config.toml` 对 msvc 目标开启 `+crt-static`，免 VC++ 运行时。
-- release：`lto` + `codegen-units=1` + `strip` + `panic="abort"`，成品约 5.9 MB。
+- release：`lto` + `codegen-units=1` + `strip` + `panic="abort"`。
 
 ## 9. 关键取舍记录
 

@@ -46,7 +46,7 @@ impl Snapshot {
     }
 }
 
-pub fn spawn(interval: Duration, lhm_port: u16) -> Shared {
+pub fn spawn(interval: Duration, lhm_port: u16, wake: impl Fn() + Send + 'static) -> Shared {
     let shared: Shared = Arc::new(Mutex::new(Snapshot::default()));
     let out = Arc::clone(&shared);
 
@@ -83,6 +83,10 @@ pub fn spawn(interval: Duration, lhm_port: u16) -> Shared {
                 snap.gpu_temp_c = gpu_sample.temp_c;
                 snap.cpu_temp_c = cpu_temp;
             }
+
+            // Wake the UI only when there is new data to show, instead of
+            // repainting on a fixed timer.
+            wake();
 
             let elapsed = started.elapsed();
             if let Some(remaining) = interval.checked_sub(elapsed) {

@@ -11,7 +11,7 @@
 
 附加功能：三种排列（竖排 / 横排 / 竖两排）、两种间距、可选显示项、中英文、系统托盘、开机自启、配置持久化。
 
-技术栈：纯 Rust（GUI 用 `egui` / `eframe`），不依赖 C++ 运行时，单文件 exe。
+技术栈：纯 Rust（GUI 用 `egui` / `eframe`），通过 Windows WARP 进行 CPU 软件渲染，不依赖 C++ 运行时，单文件 exe。
 
 > 技术栈、架构与设计取舍见 [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)。
 
@@ -29,6 +29,8 @@ cargo run --release
 - **单元格宽度固定**：数字位数变化（`9.9 KB/s` → `1.02 MB/s`）不会导致窗口宽度抖动。
 - **右键弹出菜单**：菜单是**独立的小窗口**（二级结构），紧贴内容、没有多余透明区；主窗口始终保持数据尺寸。关闭方式：点菜单项、再按一次右键、点击菜单外、按 Esc，或菜单失焦。
 - **深色主题**：强制使用高对比的深色配色（近黑底 + 近白字），不受系统浅色主题影响。
+- **CPU 渲染**：面板和设置菜单通过 Direct3D 12 的 Windows WARP 软件适配器渲染；原生 Win32 分层窗口使用 GDI 绘制数据文字，使文字在半透明面板上保持不透明。界面不使用 NVIDIA 或 AMD GPU。GPU 指标可用时仍通过 NVML 读取。
+- **指标字体**：Microsoft YaHei，14 逻辑像素，向 GDI 请求 600 字重，不额外启用粗体样式。名称和数值使用相同的不透明样式。
 - **可选指标**：菜单「显示数据」里逐项勾选，隐藏的项不占空间，窗口会相应缩小。
 - **中英文**：首次运行按 Windows 显示语言自动选择（英文系统→English，其余→中文），可随时在「语言」切换。
 - **三种排列**：竖排（每行一项）、横排（一行所有项）、竖两排（每行两项，默认依次为 上传/下载、CPU/CPU温、内存/GPU、显存/GPU温）。
@@ -47,7 +49,7 @@ cargo run -- --dump
 
 - **带应用图标与版本信息**：由 `build.rs` + `winresource` 嵌入 `assets/icon.ico`。
 - **不依赖 VC++ 运行时**：`.cargo\config.toml` 对 `x86_64-pc-windows-msvc` 开启 `+crt-static`。
-- **体积优化**：release 开启 `lto`、`codegen-units = 1`、`strip`、`panic = "abort"`，成品约 5.9 MB。
+- **体积优化**：release 开启 `lto`、`codegen-units = 1`、`strip`、`panic = "abort"`。
 - **无控制台窗口**：release 构建带 `windows_subsystem = "windows"`。
 
 ```powershell
@@ -79,6 +81,8 @@ deskpulse/
     ├── autostart.rs         # 计划任务自启（schtasks）
     ├── elevate.rs           # 未提权时用 UAC 重启自己
     ├── diag.rs              # %APPDATA%\deskpulse\diag.log
+    ├── window.rs            # 原生面板透明度、圆角和窗口样式
+    ├── text_window.rs       # 用可穿透鼠标的 GDI 分层窗口绘制不透明数据文字
     └── metrics/
         ├── mod.rs           # Snapshot + 采集线程 + 百分比
         ├── net.rs           # sysinfo 网卡差分（过滤虚拟网卡）
@@ -99,7 +103,7 @@ deskpulse/
 | `spacing` | `tight`（紧凑，默认）或 `loose`（宽松） |
 | `position` | 窗口左上角坐标，拖动后自动保存 |
 | `refresh_secs` | 采集间隔（秒） |
-| `opacity` | 背景透明度 0.0–1.0 |
+| `opacity` | 面板不透明度 0.0–1.0；默认 `0.72`。文字保持不透明。 |
 | `autostart` | 是否登录自启（实际对应计划任务 `deskpulse`） |
 | `lhm_port` | LibreHardwareMonitor HTTP 端口（退路用），默认 `8085` |
 | `language` | `zh` 或 `en`；留空则首次运行按系统语言自动选择 |
@@ -118,6 +122,12 @@ gpu = false
 vram = false
 gpu_temp = false
 ```
+
+### 悬浮窗上的 `NORMAL` 字样
+
+旧版 OpenGL 构建中，异常的 `NORMAL` 字样同时出现在悬浮窗和右键菜单上；它不是 deskpulse 的指标，也不是背景透出来的文字。关闭 G-SYNC 后仍会出现，确切来源尚未查明。
+
+新版使用 **Microsoft Basic Render Driver (WARP)** 绘制面板和菜单，并使用 GDI 绘制不透明的数据文字。用户已确认，在其机器上新版不再出现 `NORMAL`。这说明切换渲染路径能解决问题，但不能据此确定究竟是哪个组件绘制了该字样。运行新版前请彻底退出旧进程。
 
 ## 指标与数据来源
 

@@ -9,7 +9,7 @@ This document records the current tech choices, architecture and key trade-offs.
 | Area | Choice | Notes |
 | --- | --- | --- |
 | Language | Rust, edition 2024 | Windows only (`x86_64-pc-windows-msvc`) |
-| GUI | `eframe` / `egui` `0.36` (glow backend) | Immediate-mode GUI; borderless, transparent, always-on-top window |
+| GUI | `eframe` / `egui` `0.36` (wgpu, D3D12 WARP backend) | Immediate-mode GUI; CPU software rendering, borderless, transparent, always-on-top window |
 | Network / CPU / memory | `sysinfo` `0.39` | Interface byte counters, CPU usage, memory |
 | GPU | `nvml-wrapper` `0.13` | NVIDIA NVML: usage / VRAM / temperature (loads `nvml.dll` at runtime) |
 | CPU temperature (primary) | PawnIO kernel driver + hand-written FFI | No third-party Rust wrapper; uses `CreateFile` / `DeviceIoControl` directly |
@@ -29,6 +29,7 @@ Design principles: minimise dependencies; every metric that may be unavailable i
 ```
 main thread (eframe/winit event loop)
 ├── root viewport: the overlay (metric display)
+├── native Win32 layered window: opaque metric text (click-through)
 ├── deferred viewport: right-click settings menu (its own small window)
 └── App::logic every frame: drain menu actions, handle tray events, request repaint
 
@@ -41,6 +42,7 @@ menu-event thread (1)
 
 - **Collection is decoupled from the UI**: system calls happen only on the collector thread; the UI reads one snapshot per frame instead of querying every frame.
 - **Menu events wake the UI immediately**: polling tray events only from `logic` would wait up to one repaint period (~400ms); the listener thread calls `request_repaint()` so quit/switch actions take effect instantly.
+- **UI rasterization runs on the CPU**: `main.rs` restricts wgpu to Direct3D 12 and selects only an adapter reported as `DeviceType::Cpu` (Windows WARP). All three native viewports share this renderer. Startup fails if no compatible software adapter is available; it does not fall back to a hardware GPU.
 
 ### 2.2 Data flow
 
@@ -53,6 +55,7 @@ Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► App::ui 
 ### 2.3 Viewport model
 
 - **Root viewport**: borderless + transparent + always-on-top + not in the taskbar. Every frame it measures the content and sends `ViewportCommand::InnerSize` to **hug the content**, so there is no wasted transparent area.
+- **Text window**: a click-through Win32 layered window follows the root position and size. GDI draws metrics with per-pixel alpha while the root window provides the translucent panel and the same layout with invisible text.
 - **Menu viewport**: created on right-click via `show_viewport_deferred` as its own window (`decorations=false`, transparent, always-on-top), tightly fitted; the main window size is unaffected. The menu is a two-level structure.
 
 ### 2.4 Module responsibilities
@@ -68,6 +71,8 @@ Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► App::ui 
 | `autostart.rs` | Manages the logon scheduled task via `schtasks` |
 | `elevate.rs` | `TokenElevation` check + `ShellExecuteW("runas")` self-elevation |
 | `diag.rs` | Timestamped diagnostic log |
+| `window.rs` | Win32 overlay/menu opacity, rounded regions, native window styles |
+| `text_window.rs` | Click-through layered window with per-pixel-alpha GDI metric text |
 | `metrics/mod.rs` | `Snapshot`, collector thread, percentage helpers |
 | `metrics/*.rs` | Individual collectors (net / cpu / mem / gpu / pawnio / temp) |
 
@@ -118,7 +123,8 @@ Modules come from [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Mod
 ## 6. Window and layout
 
 - **Content fitting**: each frame takes the content rect, compares it with the previous size and only sends `InnerSize` past a threshold, avoiding jitter.
-- **Fixed cells**: labels/values use fixed-width boxes (tight 40 / 74, loose 46 / 92), so digit changes do not change the window width.
+- **Transparency with WARP**: the D3D12 surface reports only opaque alpha modes on the tested machine. Win32 layered-window opacity makes the panel translucent. A separate click-through Win32 window draws the metric text with GDI into a per-pixel-alpha bitmap, keeping the text opaque. Rounded window regions clip the panel and menu corners.
+- **Fixed cells**: labels/values use fixed-width boxes (tight 46 / 74, loose 46 / 92), so digit changes do not change the window width.
 - **Alignment**: in tight mode the first column's label is right-aligned and its value left-aligned; the two-column layout's second-column labels are left-aligned (their left edges line up). Aligned layouts force the box width with `set_min_width`, otherwise the box shrinks to the text and the column drifts.
 - **Spacing preset**: `item_spacing.x = 0`; the 4pt label↔value gap is added explicitly inside a cell; there is no gap between the two columns.
 - **Menu**: a deferred viewport with dark `Visuals` + near-black background and near-white text (not tied to the system theme), two-level structure; actions are passed back through an `Arc<Mutex<MenuState>>` queue that the parent drains every frame.
@@ -133,7 +139,7 @@ Modules come from [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Mod
 
 - `build.rs` embeds `assets/icon.ico` and version info with `winresource`.
 - `.cargo/config.toml` enables `+crt-static` for the msvc target, removing the VC++ runtime dependency.
-- release: `lto` + `codegen-units=1` + `strip` + `panic="abort"`, about 5.9 MB.
+- release: `lto` + `codegen-units=1` + `strip` + `panic="abort"`.
 
 ## 9. Key trade-offs
 

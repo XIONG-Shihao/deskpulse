@@ -55,7 +55,8 @@ fn is_elevated() -> bool {
             token,
             TOKEN_ELEVATION,
             &mut elevated as *mut u32 as *mut c_void,
-            size_of::<u32>() as u32,            &mut returned,
+            size_of::<u32>() as u32,
+            &mut returned,
         );
         CloseHandle(token);
         ok != 0 && elevated != 0

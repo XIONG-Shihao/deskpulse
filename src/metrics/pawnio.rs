@@ -192,7 +192,10 @@ pub enum CpuTemp {
     Intel(PawnIo),
     /// The driver could not be used. Carries the Win32 error (5 = access
     /// denied -> needs admin, 2 = not found -> driver not installed).
-    Unavailable { vendor: &'static str, error: u32 },
+    Unavailable {
+        vendor: &'static str,
+        error: u32,
+    },
 }
 
 impl CpuTemp {

@@ -1,6 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
 mod autostart;
 mod config;
 mod diag;
@@ -8,58 +7,46 @@ mod elevate;
 mod format;
 mod i18n;
 mod metrics;
+mod overlay;
 mod tray;
-mod window;
 
 use std::time::Duration;
 
-use eframe::egui;
-
-fn main() -> eframe::Result {
+fn main() {
     if std::env::args().any(|arg| arg == "--dump") {
         dump();
-        return Ok(());
+        return;
     }
 
     // CPU temperature needs the PawnIO driver, which requires elevation.
     // Relaunch elevated if we are not already (no-op under the logon task).
     if elevate::ensure_elevated() {
-        return Ok(());
+        return;
     }
 
     diag::reset("deskpulse started");
+    overlay::enable_dpi_awareness();
 
     let config = config::Config::load();
-
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title("deskpulse")
-        .with_inner_size(config.layout.window_size())
-        .with_min_inner_size([80.0, 40.0])
-        .with_decorations(false)
-        .with_transparent(true)
-        .with_always_on_top()
-        .with_resizable(false)
-        .with_taskbar(false);
-    if let Some([x, y]) = config.position {
-        viewport = viewport.with_position([x, y]);
+    // The window procedure reaches the instance through a global pointer.
+    let instance = Box::into_raw(Box::new(overlay::Overlay::new(config)));
+    // SAFETY: single-threaded setup; the pointer lives until the loop exits.
+    unsafe {
+        overlay::set_instance(instance);
+        (*instance).init_window();
+        (*instance).start_metrics();
+        (*instance).run();
+        drop(Box::from_raw(instance));
     }
-
-    let options = eframe::NativeOptions {
-        viewport,
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "deskpulse",
-        options,
-        Box::new(move |cc| Ok(Box::new(app::DeskStatsApp::new(cc, config)))),
-    )
 }
 
-/// Headless diagnostic: print five samples and exit. Useful for checking which
-/// metrics are actually available on this machine without opening a window.
+/// Headless diagnostic: print five samples and exit.
 fn dump() {
-    let shared = metrics::spawn(Duration::from_secs(1), config::Config::load().lhm_port);
+    let shared = metrics::spawn(
+        Duration::from_secs(1),
+        config::Config::load().lhm_port,
+        || {},
+    );
     for _ in 0..5 {
         std::thread::sleep(Duration::from_secs(1));
         let Ok(snapshot) = shared.lock().map(|guard| guard.clone()) else {
