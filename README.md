@@ -55,8 +55,7 @@ For comparison, the earlier `egui` / `wgpu` builds of the same overlay used ≈ 
 
 ## UI behaviour
 
-- **The panel hugs its content**: the name and value columns are sized from the measured text width (`GetTextExtentPoint32W`), so the panel is exactly as wide as its widest row and there is no wasted transparent area or stray click region.
-- **No width jitter**: the panel grows the moment a value needs more room, but only shrinks once the content is clearly narrower, so changing digits do not make the edge twitch.
+- **Fixed width sized to the worst case**: the name column is sized from the labels and the value column from the widest value each visible metric can render (`999.9 MB/s`, `100%`, `100°C`), both measured with `GetTextExtentPoint32W`. The width is decided once by the metric set, so the panel never grows or twitches as the data changes, and it is never wider than the worst case it can display.
 - **DPI aware**: the process declares per-monitor-v2 DPI awareness. The panel and fonts are laid out at the monitor's native pixel grid, and everything re-scales when the window is dragged to a monitor with a different scaling factor.
 - **Point-based gap**: the name↔value gap is a physical 2 pt (rounded up to a whole pixel), so it keeps the same physical size at any resolution and display scaling.
 - **Text alignment**: left / center / right, applied to each metric's name and value inside its cell.

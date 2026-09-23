@@ -343,6 +343,24 @@ impl Metric {
             Metric::GpuTemp => format::format_temp(snapshot.gpu_temp_c),
         }
     }
+
+    /// Strings wide enough to cover every value this metric can render, so the
+    /// panel reserves the value column once instead of growing with live data.
+    /// They follow the format maxima: three integer digits plus one decimal for
+    /// speeds, `100%` for percentages, three digits for temperatures.
+    fn widest_values(self) -> &'static [&'static str] {
+        match self {
+            Metric::NetUp | Metric::NetDown => &[
+                "999.9 MB/s",
+                "999.9 KB/s",
+                "999.9 GB/s",
+                "999.9 TB/s",
+                "0.00 MB/s",
+            ],
+            Metric::Cpu | Metric::Mem | Metric::Gpu | Metric::Vram => &["100%"],
+            Metric::CpuTemp | Metric::GpuTemp => &["100\u{00B0}C", "-10\u{00B0}C"],
+        }
+    }
 }
 
 /// One drawable piece of text.
@@ -901,28 +919,32 @@ impl Overlay {
 
         let snapshot = self.shared.lock().map(|g| g.clone()).unwrap_or_default();
         let rows = self.rows(&snapshot);
+        let text = self.text();
         let (label_w, value_w) = match self.metrics.as_ref() {
-            Some(metrics) => (
-                rows.iter()
-                    .map(|(label, _)| metrics.width(label, false))
+            Some(metrics) => {
+                // Reserve the columns from the metric set, not from the current
+                // values: the label from the labels themselves, the value from
+                // the widest string each visible metric can possibly render, so
+                // the panel width is fixed and never grows as data changes.
+                let label_w = Metric::ALL
+                    .iter()
+                    .filter(|metric| self.is_visible_metric(**metric))
+                    .map(|metric| metrics.width(metric.label(&text), false))
                     .fold(0.0_f32, f32::max)
-                    .ceil(),
-                rows.iter()
-                    .map(|(_, value)| metrics.width(value, true))
+                    .ceil();
+                let value_w = Metric::ALL
+                    .iter()
+                    .filter(|metric| self.is_visible_metric(**metric))
+                    .flat_map(|metric| metric.widest_values().iter())
+                    .map(|candidate| metrics.width(candidate, true))
                     .fold(0.0_f32, f32::max)
-                    .ceil(),
-            ),
+                    .ceil();
+                (label_w, value_w)
+            }
             None => (46.0 * self.scale, 74.0 * self.scale),
         };
 
-        let (desired_w, height) = self.content_size(rows.len(), label_w, value_w);
-        // Grow immediately when the content needs room, but shrink only once the
-        // content is clearly narrower, so the panel does not twitch as digits
-        // change every tick.
-        let mut width = desired_w;
-        if self.size.0 > desired_w && (self.size.0 - desired_w) as f32 <= 10.0 * self.scale {
-            width = self.size.0;
-        }
+        let (width, height) = self.content_size(rows.len(), label_w, value_w);
         if (width, height) != self.size {
             self.size = (width, height);
             // SAFETY: resizing our own window.
