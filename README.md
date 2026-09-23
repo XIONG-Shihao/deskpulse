@@ -21,7 +21,7 @@ Tech stack: pure Rust, drawn on a native Win32 layered window with GDI. **No GPU
 cargo run --release
 ```
 
-A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu (Show / Layout / Spacing / Align / Language / Start with Windows / Quit; the first five expand into submenus). The tray menu offers the same actions.
+A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu: Show/Hide, a metric picker, Layout, Spacing, Align, Language, Start with Windows and Quit (the metric picker and the four settings groups are submenus). The tray icon opens the very same menu, built by the same code.
 
 ## Performance
 

@@ -54,7 +54,7 @@ Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► refresh(
 
 - **One window for everything.** A borderless `WS_POPUP` window with `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE` — always on top, never activated by a click, and never shown in the taskbar or Alt-Tab.
 - **Per-pixel alpha via GDI.** The panel background (a software rounded rectangle filled with the configured alpha) and the text (`DrawTextW`, `Microsoft YaHei`) are composited into a 32-bit top-down DIB. Any non-black pixel is forced to alpha 255 so the text stays crisp over the translucent panel. The DIB is handed to the compositor with a single `UpdateLayeredWindow(..., ULW_ALPHA)` call.
-- **Drag** is manual (`SetCapture` + `SetCursorPos`), **the menu** is the native muda menu shown with `show_context_menu_for_hwnd`, and **repaint** is triggered by `WM_APP_DATA` rather than a timer.
+- **Drag** is manual (`SetCapture` + `SetCursorPos`), **the menu** is the native muda menu shown with `show_context_menu_for_hwnd` (one builder produces both it and the tray menu, so the two never drift apart), and **repaint** is triggered by `WM_APP_DATA` rather than a timer.
 
 ### 2.4 Module responsibilities
 
@@ -65,7 +65,7 @@ Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► refresh(
 | `config.rs` | `Config`/`Layout`/`Spacing`/`Align` load-save, defaults, legacy-directory migration |
 | `i18n.rs` | `Language`, string tables, system-language selection |
 | `format.rs` | Speed / percent / temperature formatting (including roll-over rules) |
-| `tray.rs` | Tray icon and menu; exposes `set_autostart_checked` |
+| `tray.rs` | Owns the tray icon and swaps in the menu that `overlay` builds |
 | `autostart.rs` | Manages the logon scheduled task via `schtasks` |
 | `elevate.rs` | `TokenElevation` check + `ShellExecuteW("runas")` self-elevation |
 | `diag.rs` | Timestamped diagnostic log |

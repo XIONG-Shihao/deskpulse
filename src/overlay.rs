@@ -657,6 +657,7 @@ impl Overlay {
     fn set_visible_metric(&mut self, metric: Metric, visible: bool) {
         self.config.visible.insert(metric.id().to_owned(), visible);
         self.config.save();
+        self.refresh();
     }
 
     fn rows(&self, snapshot: &Snapshot) -> Vec<(&'static str, String)> {
@@ -719,7 +720,7 @@ impl Overlay {
         }
 
         self.scale = self.query_scale();
-        self.tray = Tray::new(self.config.autostart, &self.language.text());
+        self.tray = Tray::new(self.build_menu());
         self.install_menu_handler();
         self.refresh();
     }
@@ -1094,7 +1095,11 @@ impl Overlay {
         }));
     }
 
-    fn show_context_menu(&self) {
+    /// Builds the full control menu.
+    ///
+    /// The same builder feeds the window's right-click menu and the tray menu,
+    /// so the two can never drift apart.
+    fn build_menu(&self) -> Menu {
         let t = self.text();
         let menu = Menu::new();
         let show = Submenu::new(t.metrics, true);
@@ -1188,11 +1193,25 @@ impl Overlay {
             None,
         ));
         let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&MenuItem::with_id("toggle", t.tray_toggle, true, None));
+        let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&MenuItem::with_id("quit", t.quit, true, None));
 
+        menu
+    }
+
+    fn show_context_menu(&self) {
+        let menu = self.build_menu();
         // SAFETY: called on the thread that owns the window.
         unsafe {
             menu.show_context_menu_for_hwnd(self.hwnd, None);
+        }
+    }
+
+    /// Rebuilds the tray menu so its check marks and labels match the state.
+    fn refresh_tray(&self) {
+        if let Some(tray) = self.tray.as_ref() {
+            tray.set_menu(self.build_menu());
         }
     }
 
@@ -1205,8 +1224,8 @@ impl Overlay {
         for id in ids {
             match id.as_str() {
                 "toggle" => self.toggle_visible(),
-                "layout_v" | "layout_vertical" => self.set_layout(Layout::Vertical),
-                "layout_h" | "layout_horizontal" => self.set_layout(Layout::Horizontal),
+                "layout_vertical" => self.set_layout(Layout::Vertical),
+                "layout_horizontal" => self.set_layout(Layout::Horizontal),
                 "layout_grid" => self.set_layout(Layout::Grid),
                 "spacing_loose" => self.set_spacing(Spacing::Loose),
                 "spacing_tight" => self.set_spacing(Spacing::Tight),
@@ -1222,6 +1241,7 @@ impl Overlay {
                 "quit" => {
                     // SAFETY: destroy our own window.
                     unsafe { DestroyWindow(self.hwnd) };
+                    return;
                 }
                 other => {
                     if let Some(metric) = Metric::from_id(other) {
@@ -1231,6 +1251,8 @@ impl Overlay {
                 }
             }
         }
+        // Keep the tray menu's check marks and labels in sync with the change.
+        self.refresh_tray();
     }
 
     fn toggle_visible(&mut self) {
@@ -1283,8 +1305,6 @@ impl Overlay {
         self.language = language;
         self.config.language = Some(language);
         self.config.save();
-        self.tray = Tray::new(self.config.autostart, &language.text());
-        self.install_menu_handler();
         self.refresh();
     }
 
@@ -1293,9 +1313,6 @@ impl Overlay {
             self.config.autostart = enabled;
         }
         self.config.save();
-        if let Some(tray) = self.tray.as_ref() {
-            tray.set_autostart_checked(self.config.autostart);
-        }
     }
 
     // ------------------------------------------------------------ messages

@@ -1,36 +1,17 @@
-use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::Menu;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-use crate::i18n::Text;
-
-/// Owns the tray icon. Menu clicks arrive through the global `muda` event
-/// channel and are dispatched by the app, same as the window context menu.
+/// Owns the tray icon.
+///
+/// The menu itself is built by the app (the same builder produces the window's
+/// right-click menu), and is swapped in again whenever a check mark or the
+/// language changes.
 pub struct Tray {
-    _icon: TrayIcon,
-    autostart_item: CheckMenuItem,
+    icon: TrayIcon,
 }
 
 impl Tray {
-    pub fn new(autostart_checked: bool, t: &Text) -> Option<Self> {
-        let menu = Menu::new();
-
-        let toggle = MenuItem::with_id("toggle", t.tray_toggle, true, None);
-        let vertical = MenuItem::with_id("layout_v", t.vertical, true, None);
-        let horizontal = MenuItem::with_id("layout_h", t.horizontal, true, None);
-        let layout_menu = Submenu::new(t.layout, true);
-        let autostart_item =
-            CheckMenuItem::with_id("autostart", t.autostart, true, autostart_checked, None);
-        let quit = MenuItem::with_id("quit", t.quit, true, None);
-
-        menu.append(&toggle).ok()?;
-        menu.append(&PredefinedMenuItem::separator()).ok()?;
-        layout_menu.append(&vertical).ok()?;
-        layout_menu.append(&horizontal).ok()?;
-        menu.append(&layout_menu).ok()?;
-        menu.append(&autostart_item).ok()?;
-        menu.append(&PredefinedMenuItem::separator()).ok()?;
-        menu.append(&quit).ok()?;
-
+    pub fn new(menu: Menu) -> Option<Self> {
         let icon = make_icon()?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
@@ -39,14 +20,12 @@ impl Tray {
             .build()
             .ok()?;
 
-        Some(Self {
-            _icon: tray,
-            autostart_item,
-        })
+        Some(Self { icon: tray })
     }
 
-    pub fn set_autostart_checked(&self, checked: bool) {
-        self.autostart_item.set_checked(checked);
+    /// Replaces the menu, e.g. after a check mark or the language changed.
+    pub fn set_menu(&self, menu: Menu) {
+        self.icon.set_menu(Some(Box::new(menu)));
     }
 }
 

@@ -54,7 +54,7 @@ muda / 托盘事件线程（由 tray-icon 持有）
 
 - **一切都用一个窗口**：无边框 `WS_POPUP`，扩展样式 `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE` —— 置顶、点击不抢焦点、不进任务栏和 Alt-Tab。
 - **GDI 逐像素 alpha**：面板背景（用代码绘制的圆角矩形，填成配置的透明度）和文字（`DrawTextW` + `Microsoft YaHei`）都合成到一张 32 位从上到下的 DIB 上。任何非黑像素一律强制 alpha 255，保证文字在半透明面板上依然锐利。最后用一次 `UpdateLayeredWindow(..., ULW_ALPHA)` 把 DIB 交给合成器。
-- **拖动**用手动 `SetCapture` + `SetCursorPos`；**菜单**用 muda 的原生菜单，通过 `show_context_menu_for_hwnd` 弹出；**重绘**由 `WM_APP_DATA` 触发，而不是定时器。
+- **拖动**用手动 `SetCapture` + `SetCursorPos`；**菜单**用 muda 的原生菜单，通过 `show_context_menu_for_hwnd` 弹出（右键菜单与托盘菜单由同一份构建代码生成，不会各自漂移）；**重绘**由 `WM_APP_DATA` 触发，而不是定时器。
 
 ### 2.4 模块职责
 
@@ -65,7 +65,7 @@ muda / 托盘事件线程（由 tray-icon 持有）
 | `config.rs` | `Config`/`Layout`/`Spacing`/`Align` 读写、缺省值、旧目录迁移 |
 | `i18n.rs` | `Language`、文案表、按系统语言选择 |
 | `format.rs` | 速率 / 百分比 / 温度格式化（含进位规则） |
-| `tray.rs` | 托盘图标与菜单，暴露 `set_autostart_checked` |
+| `tray.rs` | 持有托盘图标，并换上由 `overlay` 构建的菜单 |
 | `autostart.rs` | 用 `schtasks` 管理登录计划任务 |
 | `elevate.rs` | `TokenElevation` 检测 + `ShellExecuteW("runas")` 自提权 |
 | `diag.rs` | 带时间戳的诊断日志 |
