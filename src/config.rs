@@ -54,7 +54,8 @@ pub struct Config {
     pub lhm_port: u16,
     /// `None` until resolved, so the system language can be detected on first run.
     pub language: Option<Language>,
-    /// Per-metric visibility, keyed by `Metric::id`. Missing keys are visible.
+    /// Per-metric visibility, keyed by `Metric::id`. Missing keys fall back to
+    /// each metric's own default (visible, except the frame rate).
     pub visible: BTreeMap<String, bool>,
 }
 

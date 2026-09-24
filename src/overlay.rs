@@ -174,7 +174,7 @@ impl Overlay {
             .visible
             .get(metric.id())
             .copied()
-            .unwrap_or(true)
+            .unwrap_or_else(|| metric.default_visible())
     }
 
     fn set_visible_metric(&mut self, metric: Metric, visible: bool) {

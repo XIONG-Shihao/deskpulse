@@ -20,10 +20,11 @@ pub(super) enum Metric {
     Gpu,
     Vram,
     GpuTemp,
+    Fps,
 }
 
 impl Metric {
-    pub(super) const ALL: [Metric; 8] = [
+    pub(super) const ALL: [Metric; 9] = [
         Metric::NetUp,
         Metric::NetDown,
         Metric::Cpu,
@@ -32,6 +33,7 @@ impl Metric {
         Metric::Gpu,
         Metric::Vram,
         Metric::GpuTemp,
+        Metric::Fps,
     ];
 
     pub(super) fn id(self) -> &'static str {
@@ -44,6 +46,7 @@ impl Metric {
             Metric::Gpu => "gpu",
             Metric::Vram => "vram",
             Metric::GpuTemp => "gpu_temp",
+            Metric::Fps => "fps",
         }
     }
 
@@ -61,6 +64,7 @@ impl Metric {
             Metric::Gpu => t.gpu,
             Metric::Vram => t.vram,
             Metric::GpuTemp => t.gpu_temp,
+            Metric::Fps => t.fps,
         }
     }
 
@@ -74,7 +78,15 @@ impl Metric {
             Metric::Gpu => format::format_percent(snapshot.gpu_usage),
             Metric::Vram => format::format_percent(snapshot.vram_percent()),
             Metric::GpuTemp => format::format_temp(snapshot.gpu_temp_c),
+            Metric::Fps => format::format_frame_rate(snapshot.fps),
         }
+    }
+
+    /// Whether this metric is shown before the user has ever toggled it.
+    /// Everything is on by default except the frame rate, which is only
+    /// meaningful while a game is in the foreground and needs an ETW session.
+    pub(super) fn default_visible(self) -> bool {
+        !matches!(self, Metric::Fps)
     }
 
     /// Whether this metric has crossed into its warning range: temperatures
@@ -107,6 +119,7 @@ impl Metric {
             ],
             Metric::Cpu | Metric::Mem | Metric::Gpu | Metric::Vram => &["100%"],
             Metric::CpuTemp | Metric::GpuTemp => &["100\u{00B0}C", "-10\u{00B0}C"],
+            Metric::Fps => &["9999 FPS"],
         }
     }
 }
