@@ -35,6 +35,8 @@ const WM_LBUTTONUP: u32 = 0x0202;
 const WM_RBUTTONUP: u32 = 0x0205;
 const WM_DPICHANGED: u32 = 0x02E0;
 const WM_ERASEBKGND: u32 = 0x0014;
+const WM_TIMER: u32 = 0x0113;
+const WM_DISPLAYCHANGE: u32 = 0x007E;
 const WM_APP: u32 = 0x8000;
 const WM_APP_DATA: u32 = WM_APP + 1;
 const WM_APP_MENU: u32 = WM_APP + 2;
@@ -250,6 +252,25 @@ impl Overlay {
         } else {
             crate::diag::log("foreground event hook ready");
         }
+        // A foreground change is not the only way to end up behind: a game that
+        // goes fullscreen makes its own window topmost without switching apps.
+        // SAFETY: registers a timer owned by this window.
+        let timer = unsafe {
+            SetTimer(
+                self.hwnd,
+                topmost::TOPMOST_TIMER,
+                topmost::TOPMOST_INTERVAL_MS,
+                0,
+            )
+        };
+        crate::diag::log(&format!(
+            "topmost watchdog: {}",
+            if timer == 0 {
+                "failed to start".to_owned()
+            } else {
+                format!("checking every {} ms", topmost::TOPMOST_INTERVAL_MS)
+            }
+        ));
         self.ensure_topmost();
         self.scale = self.query_scale();
         self.tray = Tray::new(self.build_menu());
@@ -350,6 +371,13 @@ impl Overlay {
             }
             WM_APP_TOPMOST => {
                 TOPMOST_PENDING.store(false, Ordering::Release);
+                self.ensure_topmost();
+                0
+            }
+            WM_TIMER | WM_DISPLAYCHANGE => {
+                // Watchdog: someone may have gone topmost over us without any
+                // foreground change, and a display-mode change often means a
+                // game just switched to fullscreen.
                 self.ensure_topmost();
                 0
             }

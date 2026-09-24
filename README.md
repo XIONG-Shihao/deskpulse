@@ -62,6 +62,7 @@ For comparison, the earlier `egui` / `wgpu` builds of the same overlay used ≈ 
 - **Three layouts**: vertical (one item per row), horizontal (all items in one row), two-column (two items per row; default order Up/Down, CPU/CPU T, Mem/GPU, VRAM/GPU T).
 - **Two spacing presets**: tight / loose — the vertical gap between rows.
 - **Dark and translucent**: near-black panel with a configurable alpha (default `0.72`); the metric text always stays opaque.
+- **Always on top**: the overlay re-checks its z-order every 2 s and after every foreground or display-mode change, raising itself when another window covers at least half of the panel (transient tooltips and menus do not trigger it). Raising never steals focus from the foreground app.
 - **Selectable metrics**: tick items under "Show"; hidden items take no space and the panel shrinks accordingly.
 - **Chinese/English**: on first run the language follows the Windows UI language (English systems → English, otherwise Chinese); switch anytime under "Language".
 - **Speed format**: at most 3 integer digits and 1 decimal (`5.9 KB/s`, `999.9 KB/s`); when the integer part is 0, 2 decimals (`0.98 KB/s`); more than 3 integer digits rolls over to the next unit (`1023.9 KB/s` → `1.00 MB/s`).
@@ -176,6 +177,7 @@ Details about CPU temperature (why a kernel driver is required, the PawnIO proto
 ## Known limitations
 
 - **Reading CPU temperature directly requires administrator rights** (a PawnIO device restriction); without elevation it falls back to LHM over HTTP.
+- **An exclusive-fullscreen app (a game set to "full screen") cannot be overlaid.** Windows does not composite any other window over an exclusive-fullscreen swapchain, so no ordinary application can appear there — the overlay writes a line to `%APPDATA%\deskpulse\diag.log` when it detects this. Borderless/windowed fullscreen has no such limit.
 - GPU metrics depend on the NVIDIA driver (NVML). On non-NVIDIA GPUs these items show `--`.
 - Unknown metrics always show `--`; `0` is never substituted for an unknown value.
 
