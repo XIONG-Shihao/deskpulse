@@ -15,6 +15,7 @@ impl Overlay {
 
         // The bitmap and its fonts depend on the panel size and the DPI only.
         let scale = self.scale;
+        let alpha = (self.settings().opacity.clamp(0.0, 1.0) * 255.0) as u8;
         let key = (width, height, (scale * 1000.0) as i32);
         if self.canvas_key != Some(key) {
             self.canvas = Canvas::create(width, height, scale);
@@ -24,7 +25,6 @@ impl Overlay {
             return;
         };
 
-        let alpha = (self.config.opacity.clamp(0.0, 1.0) * 255.0) as u8;
         let radius = (10.0 * scale).round() as i32;
         canvas.fill_panel(alpha, radius);
         for span in spans {

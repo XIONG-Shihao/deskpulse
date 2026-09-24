@@ -31,7 +31,7 @@ impl Overlay {
         self.scale = if dpi >= 48 { dpi as f32 / 96.0 } else { 1.0 };
         self.canvas_key = None;
         self.metrics_key = None;
-        self.config.position = Some([x as f32, y as f32]);
+        self.config.active_mut().position = Some([x as f32, y as f32]);
         // SAFETY: move our own window to the suggested origin.
         unsafe {
             SetWindowPos(

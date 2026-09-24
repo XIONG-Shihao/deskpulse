@@ -14,7 +14,7 @@ use std::time::Duration;
 use tray_icon::menu::ContextMenu;
 
 use crate::autostart::Autostart;
-use crate::config::{Align, Config, Layout};
+use crate::config::{Align, Config, ModeSettings};
 use crate::i18n::{Language, Text};
 use crate::metrics::{self, Shared, Snapshot};
 use crate::tray::Tray;
@@ -106,7 +106,6 @@ pub struct Overlay {
     hwnd: isize,
     foreground_hook: isize,
     config: Config,
-    layout: Layout,
     language: Language,
     shared: Shared,
     autostart: Autostart,
@@ -133,7 +132,6 @@ impl Overlay {
         Self {
             hwnd: 0,
             foreground_hook: 0,
-            layout: config.layout,
             language,
             config,
             shared: Arc::new(Mutex::new(Snapshot::default())),
@@ -169,8 +167,13 @@ impl Overlay {
         self.language.text()
     }
 
+    /// The settings of the mode currently in use.
+    fn settings(&self) -> &ModeSettings {
+        self.config.active()
+    }
+
     fn is_visible_metric(&self, metric: Metric) -> bool {
-        self.config
+        self.settings()
             .visible
             .get(metric.id())
             .copied()
@@ -178,7 +181,10 @@ impl Overlay {
     }
 
     fn set_visible_metric(&mut self, metric: Metric, visible: bool) {
-        self.config.visible.insert(metric.id().to_owned(), visible);
+        self.config
+            .active_mut()
+            .visible
+            .insert(metric.id().to_owned(), visible);
         self.config.save();
         self.refresh();
     }
@@ -204,7 +210,7 @@ impl Overlay {
             RegisterClassW(&class);
 
             let (x, y) = self
-                .config
+                .settings()
                 .position
                 .map(|[x, y]| (x as i32, y as i32))
                 .unwrap_or((100, 100));
@@ -430,7 +436,7 @@ impl Overlay {
                 0,
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            self.config.position = Some([x as f32, y as f32]);
+            self.config.active_mut().position = Some([x as f32, y as f32]);
         }
     }
 

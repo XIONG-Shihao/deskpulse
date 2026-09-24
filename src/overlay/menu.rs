@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
-use crate::config::{Align, Layout, Spacing};
+use crate::config::{Align, Layout, Mode, Spacing};
 use crate::i18n::Language;
 
 use super::metric::Metric;
@@ -36,6 +36,20 @@ impl Overlay {
     pub(super) fn build_menu(&self) -> Menu {
         let t = self.text();
         let menu = Menu::new();
+
+        let mode = Submenu::new(t.mode, true);
+        for (id, label, selected) in [
+            (
+                "mode_desktop",
+                t.mode_desktop,
+                self.config.mode == Mode::Desktop,
+            ),
+            ("mode_game", t.mode_game, self.config.mode == Mode::Game),
+        ] {
+            let _ = mode.append(&CheckMenuItem::with_id(id, label, true, selected, None));
+        }
+        let _ = menu.append(&mode);
+
         let show = Submenu::new(t.metrics, true);
         for metric in Metric::ALL {
             let item = CheckMenuItem::with_id(
@@ -54,14 +68,18 @@ impl Overlay {
             (
                 "layout_vertical",
                 t.vertical,
-                self.layout == Layout::Vertical,
+                self.settings().layout == Layout::Vertical,
             ),
             (
                 "layout_horizontal",
                 t.horizontal,
-                self.layout == Layout::Horizontal,
+                self.settings().layout == Layout::Horizontal,
             ),
-            ("layout_grid", t.grid, self.layout == Layout::Grid),
+            (
+                "layout_grid",
+                t.grid,
+                self.settings().layout == Layout::Grid,
+            ),
         ] {
             let _ = layout.append(&CheckMenuItem::with_id(id, label, true, selected, None));
         }
@@ -72,12 +90,12 @@ impl Overlay {
             (
                 "spacing_loose",
                 t.spacing_loose,
-                self.config.spacing == Spacing::Loose,
+                self.settings().spacing == Spacing::Loose,
             ),
             (
                 "spacing_tight",
                 t.spacing_tight,
-                self.config.spacing == Spacing::Tight,
+                self.settings().spacing == Spacing::Tight,
             ),
         ] {
             let _ = spacing.append(&CheckMenuItem::with_id(id, label, true, selected, None));
@@ -86,16 +104,20 @@ impl Overlay {
 
         let align = Submenu::new(t.align, true);
         for (id, label, selected) in [
-            ("align_left", t.align_left, self.config.align == Align::Left),
+            (
+                "align_left",
+                t.align_left,
+                self.settings().align == Align::Left,
+            ),
             (
                 "align_center",
                 t.align_center,
-                self.config.align == Align::Center,
+                self.settings().align == Align::Center,
             ),
             (
                 "align_right",
                 t.align_right,
-                self.config.align == Align::Right,
+                self.settings().align == Align::Right,
             ),
         ] {
             let _ = align.append(&CheckMenuItem::with_id(id, label, true, selected, None));
@@ -107,7 +129,7 @@ impl Overlay {
             let percent = (level * 100.0).round() as u32;
             let id = format!("opacity_{percent}");
             let label = format!("{percent}%");
-            let selected = (self.config.opacity - level).abs() < 0.005;
+            let selected = (self.settings().opacity - level).abs() < 0.005;
             let _ = opacity.append(&CheckMenuItem::with_id(id, label, true, selected, None));
         }
         let _ = menu.append(&opacity);
@@ -168,6 +190,8 @@ impl Overlay {
         for id in ids {
             match id.as_str() {
                 "toggle" => self.toggle_visible(),
+                "mode_desktop" => self.set_mode(Mode::Desktop),
+                "mode_game" => self.set_mode(Mode::Game),
                 "layout_vertical" => self.set_layout(Layout::Vertical),
                 "layout_horizontal" => self.set_layout(Layout::Horizontal),
                 "layout_grid" => self.set_layout(Layout::Grid),
@@ -220,39 +244,79 @@ impl Overlay {
         }
     }
 
-    pub(super) fn set_layout(&mut self, layout: Layout) {
-        if self.layout == layout {
+    /// Switches between the two settings sets, moving the panel to the position
+    /// that mode was last dragged to.
+    pub(super) fn set_mode(&mut self, mode: Mode) {
+        if self.config.mode == mode {
             return;
         }
-        self.layout = layout;
-        self.config.layout = layout;
+        self.config.mode = mode;
+        self.config.save();
+        self.move_to_active_position();
+        self.refresh();
+        crate::diag::log(&format!(
+            "mode: {}",
+            match mode {
+                Mode::Desktop => "desktop",
+                Mode::Game => "game",
+            }
+        ));
+    }
+
+    /// Moves the panel to the active mode's saved position, if it has one.
+    fn move_to_active_position(&mut self) {
+        let Some([x, y]) = self.settings().position else {
+            return;
+        };
+        if self.hwnd == 0 {
+            return;
+        }
+        // SAFETY: moving our own window.
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                0,
+                x as i32,
+                y as i32,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub(super) fn set_layout(&mut self, layout: Layout) {
+        if self.settings().layout == layout {
+            return;
+        }
+        self.config.active_mut().layout = layout;
         self.config.save();
         self.refresh();
     }
 
     pub(super) fn set_spacing(&mut self, spacing: Spacing) {
-        if self.config.spacing == spacing {
+        if self.settings().spacing == spacing {
             return;
         }
-        self.config.spacing = spacing;
+        self.config.active_mut().spacing = spacing;
         self.config.save();
         self.refresh();
     }
 
     pub(super) fn set_align(&mut self, align: Align) {
-        if self.config.align == align {
+        if self.settings().align == align {
             return;
         }
-        self.config.align = align;
+        self.config.active_mut().align = align;
         self.config.save();
         self.refresh();
     }
 
     pub(super) fn set_opacity(&mut self, opacity: f32) {
-        if (self.config.opacity - opacity).abs() < 0.005 {
+        if (self.settings().opacity - opacity).abs() < 0.005 {
             return;
         }
-        self.config.opacity = opacity;
+        self.config.active_mut().opacity = opacity;
         self.config.save();
         self.refresh();
     }
