@@ -21,7 +21,7 @@
 cargo run --release
 ```
 
-运行后在桌面出现悬浮窗，鼠标拖动可移动。**右键**打开设置菜单：显示/隐藏、显示数据、布局、间距、对齐、语言、开机自启、退出（其中「显示数据」和四个设置项为子菜单）。托盘图标打开的是同一个菜单，由同一份代码构建。
+运行后在桌面出现悬浮窗，鼠标拖动可移动。**右键**打开设置菜单：显示/隐藏、显示数据、布局、间距、对齐、透明度、语言、开机自启、退出（其中「显示数据」和五个设置项为子菜单）。托盘图标打开的是同一个菜单，由同一份代码构建。
 
 ## 性能
 
@@ -102,19 +102,29 @@ deskpulse/
 │   └── IntelMSR.bin         # PawnIO 模块（Intel MSR）
 └── src/
     ├── main.rs              # 入口、--dump 诊断、自提权
-    ├── overlay.rs           # 整个 Win32/GDI 界面：窗口、布局、绘制、菜单、输入
+    ├── overlay.rs           # 模块根：窗口生命周期、消息循环、拖动
+    ├── overlay/             # 界面，按职责拆分
+    │   ├── win32.rs         # 原生 Win32 声明（FFI 块与值类型）
+    │   ├── metric.rs        # 可显示的指标
+    │   ├── canvas.rs        # GDI 位图/字体与文字测量
+    │   ├── layout.rs        # 名称/数值矩形的位置计算
+    │   ├── paint.rs         # 单次重绘
+    │   ├── menu.rs          # 控制菜单（右键 + 托盘）及其动作
+    │   ├── topmost.rs       # 保持在其它置顶窗口之上
+    │   └── dpi.rs           # DPI 感知与跨显示器重算
     ├── config.rs            # 配置读写 + 旧目录迁移
     ├── i18n.rs              # 中英文文案 + 系统语言检测
     ├── format.rs            # 速率 / 百分比 / 温度格式化
-    ├── tray.rs              # 托盘图标与菜单
+    ├── tray.rs              # 托盘图标（菜单由 `overlay` 提供）
     ├── autostart.rs         # 计划任务自启（schtasks）
     ├── elevate.rs           # 未提权时用 UAC 重启自己
+    ├── single_instance.rs   # 每个登录会话只允许一个悬浮窗
     ├── diag.rs              # %APPDATA%\deskpulse\diag.log
+    ├── wide.rs              # 补 NUL 的 UTF-16 字符串
     └── metrics/
         ├── mod.rs           # Snapshot + 采集线程 + 百分比
         ├── net.rs           # sysinfo 网卡差分（过滤虚拟网卡）
-        ├── cpu.rs           # sysinfo CPU 占用
-        ├── mem.rs           # sysinfo 内存
+        ├── system.rs        # sysinfo CPU 占用 + 内存（共用一个 System）
         ├── gpu.rs           # NVIDIA NVML：占用 / 显存 / 温度
         ├── pawnio.rs        # PawnIO 内核驱动直读 CPU 温度
         └── temp.rs          # 温度：PawnIO 优先，LHM HTTP 退路
@@ -131,7 +141,7 @@ deskpulse/
 | `align` | `left`（默认）、`center` 或 `right` —— 单元格内文字对齐 |
 | `position` | 窗口左上角坐标，拖动后自动保存 |
 | `refresh_secs` | 采集间隔（秒） |
-| `opacity` | 面板不透明度 0.0–1.0；默认 `0.72`。文字保持不透明。 |
+| `opacity` | 面板不透明度 0.0–1.0；默认 `0.72`。菜单提供六档；该字段仍可填任意值。文字保持不透明。 |
 | `autostart` | 是否登录自启（实际对应计划任务 `deskpulse`） |
 | `lhm_port` | LibreHardwareMonitor HTTP 端口（退路用），默认 `8085` |
 | `language` | `zh` 或 `en`；留空则首次运行按系统语言自动选择 |

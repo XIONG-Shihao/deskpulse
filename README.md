@@ -21,7 +21,7 @@ Tech stack: pure Rust, drawn on a native Win32 layered window with GDI. **No GPU
 cargo run --release
 ```
 
-A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu: Show/Hide, a metric picker, Layout, Spacing, Align, Language, Start with Windows and Quit (the metric picker and the four settings groups are submenus). The tray icon opens the very same menu, built by the same code.
+A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu: Show/Hide, a metric picker, Layout, Spacing, Align, Opacity, Language, Start with Windows and Quit (the metric picker and the five settings groups are submenus). The tray icon opens the very same menu, built by the same code.
 
 ## Performance
 
@@ -102,19 +102,29 @@ deskpulse/
 │   └── IntelMSR.bin         # PawnIO module (Intel MSR)
 └── src/
     ├── main.rs              # entry, --dump diagnostic, self-elevation
-    ├── overlay.rs           # the whole Win32/GDI UI: window, layout, drawing, menu, input
+    ├── overlay.rs           # module root: window lifecycle, message loop, drag
+    ├── overlay/             # the UI, split by concern
+    │   ├── win32.rs         # raw Win32 declarations (FFI blocks and value types)
+    │   ├── metric.rs        # the metrics that can be shown
+    │   ├── canvas.rs        # GDI bitmap/fonts and text measurement
+    │   ├── layout.rs        # where each name/value rectangle goes
+    │   ├── paint.rs         # one repaint
+    │   ├── menu.rs          # control menu (right-click + tray) and its actions
+    │   ├── topmost.rs       # keep the overlay above other topmost windows
+    │   └── dpi.rs           # DPI awareness and per-monitor re-scaling
     ├── config.rs            # config load/save + legacy-dir migration
     ├── i18n.rs              # zh/en strings + system-language detection
     ├── format.rs            # speed / percent / temperature formatting
-    ├── tray.rs              # tray icon and menu
+    ├── tray.rs              # tray icon; the menu comes from `overlay`
     ├── autostart.rs         # logon scheduled task (schtasks)
     ├── elevate.rs           # relaunch via UAC when not elevated
+    ├── single_instance.rs   # one overlay per logon session
     ├── diag.rs              # %APPDATA%\deskpulse\diag.log
+    ├── wide.rs              # NUL-terminated UTF-16 helper
     └── metrics/
         ├── mod.rs           # Snapshot + collector thread + percentages
         ├── net.rs           # sysinfo network byte diff (filters virtual NICs)
-        ├── cpu.rs           # sysinfo CPU usage
-        ├── mem.rs           # sysinfo memory
+        ├── system.rs        # sysinfo CPU usage + memory (one System)
         ├── gpu.rs           # NVIDIA NVML: usage / VRAM / temperature
         ├── pawnio.rs        # CPU temperature straight from the PawnIO driver
         └── temp.rs          # temperature: PawnIO first, LHM HTTP fallback
@@ -131,7 +141,7 @@ Path: `%APPDATA%\deskpulse\config.toml`.
 | `align` | `left` (default), `center` or `right` — text alignment inside each cell |
 | `position` | Top-left window position; saved after dragging |
 | `refresh_secs` | Sampling interval in seconds |
-| `opacity` | Panel alpha, 0.0–1.0; default `0.72` (translucent). Text stays opaque. |
+| `opacity` | Panel alpha, 0.0–1.0; default `0.72` (translucent). The menu offers six steps; the field still accepts any value. Text stays opaque. |
 | `autostart` | Launch at logon (maps to the `deskpulse` scheduled task) |
 | `lhm_port` | LibreHardwareMonitor HTTP port (fallback), default `8085` |
 | `language` | `zh` or `en`; empty means auto-detect from the system language on first run |

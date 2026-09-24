@@ -61,7 +61,9 @@ muda / 托盘事件线程（由 tray-icon 持有）
 | 模块 | 职责 |
 | --- | --- |
 | `main.rs` | 解析 `--dump`；自提权；声明 DPI 感知；持有 `Overlay` 实例并跑消息循环 |
-| `overlay.rs` | 整个界面：创建窗口、处理 DPI、布局、GDI 绘制、原生菜单、拖动与消息处理 |
+| `overlay.rs` + `overlay/` | 整个界面，按职责拆分：窗口生命周期与消息循环（`overlay.rs`）、原生 Win32 FFI（`win32.rs`）、指标（`metric.rs`）、GDI 画布（`canvas.rs`）、布局（`layout.rs`）、绘制（`paint.rs`）、菜单（`menu.rs`）、置顶（`topmost.rs`）、DPI（`dpi.rs`） |
+| `wide.rs` | 供各 Win32 调用方共用的「补 NUL 的 UTF-16」辅助函数 |
+| `single_instance.rs` | 命名互斥体：每个登录会话只运行一个悬浮窗 |
 | `config.rs` | `Config`/`Layout`/`Spacing`/`Align` 读写、缺省值、旧目录迁移 |
 | `i18n.rs` | `Language`、文案表、按系统语言选择 |
 | `format.rs` | 速率 / 百分比 / 温度格式化（含进位规则） |
@@ -70,7 +72,7 @@ muda / 托盘事件线程（由 tray-icon 持有）
 | `elevate.rs` | `TokenElevation` 检测 + `ShellExecuteW("runas")` 自提权 |
 | `diag.rs` | 带时间戳的诊断日志 |
 | `metrics/mod.rs` | `Snapshot`、采集线程、百分比计算 |
-| `metrics/*.rs` | 各指标采集器（net / cpu / mem / gpu / pawnio / temp） |
+| `metrics/*.rs` | 各指标采集器（net / system / gpu / pawnio / temp） |
 
 ## 3. 指标数据源
 

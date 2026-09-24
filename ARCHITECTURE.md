@@ -61,7 +61,9 @@ Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► refresh(
 | Module | Responsibility |
 | --- | --- |
 | `main.rs` | Parse `--dump`; self-elevate; declare DPI awareness; own the `Overlay` instance and run the message loop |
-| `overlay.rs` | The whole UI: window creation, DPI handling, layout, GDI drawing, native menu, drag and message handling |
+| `overlay.rs` + `overlay/` | The UI, split by concern: window lifecycle and message loop (`overlay.rs`), raw Win32 FFI (`win32.rs`), metrics (`metric.rs`), GDI canvas (`canvas.rs`), layout (`layout.rs`), painting (`paint.rs`), menus (`menu.rs`), topmost handling (`topmost.rs`) and DPI (`dpi.rs`) |
+| `wide.rs` | NUL-terminated UTF-16 helper shared by the Win32 callers |
+| `single_instance.rs` | Named-mutex guard so one logon session runs one overlay |
 | `config.rs` | `Config`/`Layout`/`Spacing`/`Align` load-save, defaults, legacy-directory migration |
 | `i18n.rs` | `Language`, string tables, system-language selection |
 | `format.rs` | Speed / percent / temperature formatting (including roll-over rules) |
@@ -70,7 +72,7 @@ Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► refresh(
 | `elevate.rs` | `TokenElevation` check + `ShellExecuteW("runas")` self-elevation |
 | `diag.rs` | Timestamped diagnostic log |
 | `metrics/mod.rs` | `Snapshot`, collector thread, percentage helpers |
-| `metrics/*.rs` | Individual collectors (net / cpu / mem / gpu / pawnio / temp) |
+| `metrics/*.rs` | Individual collectors (net / system / gpu / pawnio / temp) |
 
 ## 3. Metric data sources
 
