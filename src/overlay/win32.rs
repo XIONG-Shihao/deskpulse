@@ -135,7 +135,6 @@ unsafe extern "system" {
     pub(super) fn ShowWindow(hwnd: isize, command: i32) -> i32;
     pub(super) fn LoadCursorW(instance: isize, name: isize) -> isize;
     pub(super) fn GetDpiForWindow(hwnd: isize) -> u32;
-    pub(super) fn SetTimer(hwnd: isize, id: usize, elapse: u32, callback: isize) -> usize;
     pub(super) fn SetProcessDpiAwarenessContext(value: isize) -> i32;
     pub(super) fn SetProcessDPIAware() -> i32;
     pub(super) fn UpdateLayeredWindow(
@@ -206,9 +205,4 @@ unsafe extern "system" {
         pitch: u32,
         face: *const u16,
     ) -> isize;
-}
-
-#[link(name = "shell32")]
-unsafe extern "system" {
-    pub(super) fn SHQueryUserNotificationState(state: *mut i32) -> i32;
 }

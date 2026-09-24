@@ -150,7 +150,7 @@ Modules come from [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Mod
 ## 10. Known limitations / not done
 
 - Direct temperature reading needs admin; without it the app falls back to LHM (`--` if not installed).
-- **The overlay cannot be drawn over an exclusive-fullscreen app.** Windows hands the display to that app's swapchain and composites nothing on top of it, so no ordinary (non-injecting) application can appear there. The overlay detects this (`SHQueryUserNotificationState`), logs why, and stops fighting; borderless/windowed fullscreen is unaffected.
+- **The overlay cannot be drawn over an exclusive-fullscreen app.** Windows hands the display to that app's swapchain and composites nothing on top of it, so no ordinary (non-injecting) application can appear there; borderless/windowed fullscreen is unaffected.
 - The Intel temperature path is implemented but not verified on an Intel machine (the dev machine is AMD).
 - Multiple GPUs: only `device_by_index(0)` is used.
 - No history graphs, no log persistence, only zh/en.
