@@ -23,7 +23,7 @@ const WARN_COLOR: u32 = 0x0050_50FF; // RGB(255, 80, 80)
 impl Overlay {
     pub(super) fn rows(&self, snapshot: &Snapshot) -> Vec<(&'static str, String, bool)> {
         let t = self.text();
-        Metric::ALL
+        let mut rows: Vec<(&'static str, String, bool)> = Metric::ALL
             .iter()
             .filter(|metric| self.is_visible_metric(**metric))
             .map(|metric| {
@@ -33,7 +33,13 @@ impl Overlay {
                     metric.is_warning(snapshot),
                 )
             })
-            .collect()
+            .collect();
+        // The exclusive-fullscreen notice goes first: it explains why the panel
+        // was missing while a game held the display.
+        if let Some((label, value)) = self.fullscreen_hint() {
+            rows.insert(0, (label, value.to_owned(), true));
+        }
+        rows
     }
 
     // ------------------------------------------------------------- window
