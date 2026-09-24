@@ -37,7 +37,6 @@ impl Language {
                 gpu: "GPU",
                 vram: "显存",
                 gpu_temp: "GPU温",
-                fps: "帧率",
                 metrics: "显示数据",
                 mode: "模式",
                 mode_desktop: "桌面",
@@ -70,7 +69,6 @@ impl Language {
                 gpu: "GPU",
                 vram: "VRAM",
                 gpu_temp: "GPU T",
-                fps: "FPS",
                 metrics: "Show",
                 mode: "Mode",
                 mode_desktop: "Desktop",
@@ -108,7 +106,6 @@ pub struct Text {
     pub gpu: &'static str,
     pub vram: &'static str,
     pub gpu_temp: &'static str,
-    pub fps: &'static str,
     pub metrics: &'static str,
     /// Submenu that switches between the desktop and game settings sets.
     pub mode: &'static str,

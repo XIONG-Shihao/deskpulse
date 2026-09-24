@@ -55,9 +55,6 @@ fn main() {
         (*instance).init_window();
         (*instance).start_metrics();
         (*instance).run();
-        // The metrics thread is still alive here, so the ETW session has to be
-        // stopped explicitly (a session outlives its process otherwise).
-        metrics::fps::shutdown();
         drop(Box::from_raw(instance));
     }
 }
@@ -75,7 +72,7 @@ fn dump() {
             continue;
         };
         println!(
-            "net-up={:<12} net-down={:<12} cpu={:<5} cpu-temp={:<6} mem={:<5} gpu={:<5} vram={:<6} gpu-temp={:<6} fps={}",
+            "net-up={:<12} net-down={:<12} cpu={:<5} cpu-temp={:<6} mem={:<5} gpu={:<5} vram={:<5} gpu-temp={}",
             format::format_speed(snapshot.net_up_bps),
             format::format_speed(snapshot.net_down_bps),
             format::format_percent(snapshot.cpu_usage),
@@ -84,9 +81,6 @@ fn dump() {
             format::format_percent(snapshot.gpu_usage),
             format::format_percent(snapshot.vram_percent()),
             format::format_temp(snapshot.gpu_temp_c),
-            format::format_frame_rate(snapshot.fps),
         );
     }
-    // Do not leave the trace session behind.
-    metrics::fps::shutdown();
 }

@@ -63,8 +63,7 @@ pub struct ModeSettings {
     pub position: Option<[f32; 2]>,
     /// Background alpha, 0.0 (invisible) ..= 1.0 (opaque).
     pub opacity: f32,
-    /// Per-metric visibility, keyed by `Metric::id`. Missing keys fall back to
-    /// each metric's own default (visible, except the frame rate).
+    /// Per-metric visibility, keyed by `Metric::id`. Missing keys are visible.
     pub visible: BTreeMap<String, bool>,
 }
 

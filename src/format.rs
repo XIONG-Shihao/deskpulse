@@ -35,14 +35,6 @@ pub fn format_temp(celsius: Option<f32>) -> String {
     }
 }
 
-/// Present rate of the foreground application, e.g. `144 FPS`.
-pub fn format_frame_rate(fps: Option<f32>) -> String {
-    match fps {
-        Some(v) if v.is_finite() && v >= 0.0 => format!("{v:.0} FPS"),
-        _ => "--".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,13 +49,5 @@ mod tests {
         // Below one unit: two decimals.
         assert_eq!(format_speed(Some(1024.0 * 0.98)), "0.98 KB/s");
         assert_eq!(format_speed(None), "--");
-    }
-
-    #[test]
-    fn frame_rate_rounds_to_whole_frames() {
-        assert_eq!(format_frame_rate(Some(143.6)), "144 FPS");
-        assert_eq!(format_frame_rate(Some(0.0)), "0 FPS");
-        assert_eq!(format_frame_rate(None), "--");
-        assert_eq!(format_frame_rate(Some(f32::NAN)), "--");
     }
 }

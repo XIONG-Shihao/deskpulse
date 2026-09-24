@@ -62,6 +62,7 @@ For comparison, the earlier `egui` / `wgpu` builds of the same overlay used ≈ 
 - **Three layouts**: vertical (one item per row), horizontal (all items in one row), two-column (two items per row; default order Up/Down, CPU/CPU T, Mem/GPU, VRAM/GPU T).
 - **Two spacing presets**: tight / loose — the vertical gap between rows.
 - **Dark and translucent**: near-black panel with a configurable alpha (default `0.72`); the metric text always stays opaque.
+- **Warning colour**: a value turns red once it crosses its threshold — temperature above 80 °C, memory above 80 %, video memory above 100 %; names stay muted so the values keep the visual lead.
 - **Selectable metrics**: tick items under "Show"; hidden items take no space and the panel shrinks accordingly.
 - **Chinese/English**: on first run the language follows the Windows UI language (English systems → English, otherwise Chinese); switch anytime under "Language".
 - **Speed format**: at most 3 integer digits and 1 decimal (`5.9 KB/s`, `999.9 KB/s`); when the integer part is 0, 2 decimals (`0.98 KB/s`); more than 3 integer digits rolls over to the next unit (`1023.9 KB/s` → `1.00 MB/s`).
@@ -169,14 +170,18 @@ gpu_temp = false
 | CPU usage | `sysinfo` | OK |
 | CPU temperature | PawnIO driver first, else LHM HTTP | OK (Tctl/Tdie) |
 | Memory usage | `sysinfo` | OK |
-| GPU usage / VRAM / temperature | NVIDIA NVML | OK |
+| GPU usage / temperature | NVIDIA NVML | OK |
+| VRAM | GPU Adapter Memory performance counters: dedicated + borrowed, so it can exceed 100 % (NVML dedicated-only as fallback) | OK (65 % vs 55 % dedicated-only on the same frame) |
 
 Details about CPU temperature (why a kernel driver is required, the PawnIO protocol, the elevation requirement) are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Known limitations
 
 - **Reading CPU temperature directly requires administrator rights** (a PawnIO device restriction); without elevation it falls back to LHM over HTTP.
-- **An exclusive-fullscreen app (a game set to "full screen") cannot be overlaid.** Windows does not composite any other window over an exclusive-fullscreen swapchain, so no ordinary application can appear there; use borderless/windowed fullscreen instead.
+- **Exclusive fullscreen cannot be overlaid, and not every "full screen" is the same.** The panel is a per-pixel-alpha layered window, so it exists only where DWM composites. A real exclusive fullscreen — the one Windows flags as `QUNS_RUNNING_D3D_FULL_SCREEN` — takes the display away from the desktop and stops DWM compositing that screen, and then **no non-injected window** can be drawn there: Task Manager with "always on top" is not visible either, and neither is the Windows volume bar. Every tool that does show numbers over it (RTSS / MSI Afterburner, Steam, Discord, the WeGame overlay) injects a DLL into the game, hooks its Present and draws inside the game's own frame; deskpulse does not inject (anti-cheat blocks it, and it risks bans).
+  - **Shows:** Black Myth: Wukong (UE5 / DX12), Apex (`r5apex_dx12.exe`, DX12). A DX12 "full screen" is still a DWM-composited borderless window, so the panel stays visible.
+  - **Does not show:** League of Legends (old D3D9 true-exclusive path), VALORANT (configured for exclusive fullscreen). In those fullscreen modes the panel really is not on screen; borderless or windowed puts it back.
+  - On a real exclusive fullscreen the panel shows `Note | exclusive: borderless` in its first row for ten seconds after it ends, so the reason is visible. The detector and the measurements behind it are documented in `src/overlay/fullscreen.rs`.
 - GPU metrics depend on the NVIDIA driver (NVML). On non-NVIDIA GPUs these items show `--`.
 - Unknown metrics always show `--`; `0` is never substituted for an unknown value.
 

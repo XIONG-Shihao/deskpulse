@@ -2,7 +2,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub(crate) mod fps;
 mod gpu;
 mod gpu_mem;
 mod net;
@@ -28,8 +27,6 @@ pub struct Snapshot {
     /// Device-wide committed GPU memory (dedicated + borrowed from RAM).
     pub gpu_mem_committed: Option<u64>,
     pub gpu_temp_c: Option<f32>,
-    /// Present rate of the foreground application, from ETW.
-    pub fps: Option<f32>,
 }
 
 pub type Shared = Arc<Mutex<Snapshot>>;
@@ -68,7 +65,6 @@ pub fn spawn(interval: Duration, lhm_port: u16, wake: impl Fn() + Send + 'static
         let mut net = net::NetCollector::new();
         let mut gpu = gpu::GpuCollector::new();
         let mut gpu_mem = gpu_mem::GpuMemCollector::new();
-        let mut fps = fps::FpsCollector::new();
         let mut temp = temp::TempCollector::new(lhm_port);
 
         // Prime the counters so the first real sample has a delta to compare against.
@@ -83,7 +79,6 @@ pub fn spawn(interval: Duration, lhm_port: u16, wake: impl Fn() + Send + 'static
             let (net_up, net_down) = net.sample();
             let gpu_sample = gpu.sample();
             let gpu_committed = gpu_mem.as_mut().and_then(|collector| collector.sample());
-            let fps_sample = fps.as_mut().and_then(|collector| collector.sample());
             let cpu_temp = temp.sample();
 
             if let Ok(mut snap) = out.lock() {
@@ -98,7 +93,6 @@ pub fn spawn(interval: Duration, lhm_port: u16, wake: impl Fn() + Send + 'static
                 snap.gpu_mem_committed = gpu_committed.map(|(_, committed)| committed);
                 snap.gpu_temp_c = gpu_sample.temp_c;
                 snap.cpu_temp_c = cpu_temp;
-                snap.fps = fps_sample;
             }
 
             // Wake the UI only when there is new data to show, instead of
