@@ -21,6 +21,7 @@
 //!   because it self-elevates for the CPU temperature driver; without them the
 //!   collector is simply not created.
 
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -39,6 +40,14 @@ const DXGI_PROVIDER: Guid = Guid {
 /// `Microsoft-Windows-DXGI` event id for task `Present`, opcode `win:Start`:
 /// one per `IDXGISwapChain::Present` call.
 const PRESENT_START_ID: u16 = 42;
+
+/// Readings kept to compute the rate. A real-time ETW session hands its buffers
+/// over on a timer (one second is the smallest it allows) instead of
+/// continuously, so a rate measured over a single refresh interval beats
+/// against that delivery and swings wildly — a steady 100 fps game reads 0 and
+/// 200 on alternating samples. Averaging over the retained window cancels the
+/// lumps: at the default one-second refresh this is a three-second window.
+const RATE_WINDOW: usize = 4;
 
 const PROCESS_TRACE_MODE_REAL_TIME: u32 = 0x0000_0100;
 const PROCESS_TRACE_MODE_EVENT_RECORD: u32 = 0x1000_0000;
@@ -325,7 +334,7 @@ fn properties_with_name(name: &[u16]) -> Vec<u64> {
         (*props).wnode.buffer_size = total as u32;
         (*props).wnode.flags = WNODE_FLAG_TRACED_GUID;
         (*props).wnode.client_context = CLIENT_CONTEXT_QPC;
-        (*props).buffer_size = 16; // KB per buffer
+        (*props).buffer_size = 8; // KB per buffer
         (*props).minimum_buffers = 4;
         (*props).maximum_buffers = 16;
         (*props).log_file_mode = EVENT_TRACE_REAL_TIME_MODE;
@@ -395,9 +404,9 @@ fn consume(logfile: &mut EventTraceLogfileW) {
 }
 
 pub struct FpsCollector {
-    last_count: usize,
+    /// The last few (time, present count) readings, newest last.
+    history: VecDeque<(Instant, usize)>,
     last_pid: u32,
-    last_at: Instant,
 }
 
 impl FpsCollector {
@@ -419,9 +428,8 @@ impl FpsCollector {
         crate::diag::log("fps: DXGI present counter started");
         SESSION.store(session, Ordering::Relaxed);
         Some(Self {
-            last_count: 0,
+            history: VecDeque::new(),
             last_pid: 0,
-            last_at: Instant::now(),
         })
     }
 
@@ -444,25 +452,36 @@ impl FpsCollector {
         // Counting is per target, so switching windows restarts the count.
         if pid != self.last_pid {
             self.last_pid = pid;
-            self.last_count = 0;
+            self.history.clear();
             PRESENTS.store(0, Ordering::Relaxed);
             TARGET_PID.store(pid, Ordering::Relaxed);
-            self.last_at = Instant::now();
             return None;
         }
 
-        let count = PRESENTS.load(Ordering::Relaxed);
-        let now = Instant::now();
-        let seconds = now.duration_since(self.last_at).as_secs_f32();
-        let presents = count.saturating_sub(self.last_count);
-        self.last_count = count;
-        self.last_at = now;
+        self.history
+            .push_back((Instant::now(), PRESENTS.load(Ordering::Relaxed)));
+        while self.history.len() > RATE_WINDOW {
+            self.history.pop_front();
+        }
 
-        if pid == 0 || seconds <= 0.0 || presents == 0 {
+        if pid == 0 {
             return None;
         }
-        Some(presents as f32 / seconds)
+        rate(&self.history)
     }
+}
+
+/// Presents per second across the retained readings, or `None` until there are
+/// two of them or nothing has been presented.
+fn rate(history: &VecDeque<(Instant, usize)>) -> Option<f32> {
+    let (oldest_at, oldest_count) = *history.front()?;
+    let (newest_at, newest_count) = *history.back()?;
+    let seconds = newest_at.duration_since(oldest_at).as_secs_f32();
+    let presents = newest_count.saturating_sub(oldest_count);
+    if seconds <= 0.0 || presents == 0 {
+        return None;
+    }
+    Some(presents as f32 / seconds)
 }
 
 impl Drop for FpsCollector {
@@ -497,6 +516,25 @@ pub fn shutdown() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A steady frame rate that ETW delivers in lumps must still read steady.
+    /// This is the shape a one-second window gets wrong: it sees 0, then 300.
+    #[test]
+    fn rate_smooths_bursty_delivery() {
+        use std::time::Duration;
+
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        // 300 presents arrive in one lump every other second: 100/s on average.
+        let bursty = VecDeque::from([(at(0), 0), (at(1), 0), (at(2), 300), (at(3), 300)]);
+        assert_eq!(rate(&bursty), Some(100.0));
+
+        // A single reading, or one with no presents, is not a rate.
+        let single = VecDeque::from([(at(0), 0)]);
+        assert_eq!(rate(&single), None);
+        let idle = VecDeque::from([(at(0), 7), (at(1), 7)]);
+        assert_eq!(rate(&idle), None);
+    }
 
     /// The layout assumptions the callback depends on.
     #[test]
