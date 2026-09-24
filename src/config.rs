@@ -91,11 +91,11 @@ impl Config {
     }
 
     pub fn load() -> Self {
-        let (mut config, save_needed) = match Self::read(Self::path()) {
-            Some((config, migrated)) => (config, migrated),
+        let (mut config, migrated) = match Self::read(Self::path()) {
+            Some(config) => (config, false),
             // First run under the new name: adopt the pre-rename config.
             None => match Self::read(Self::legacy_path()) {
-                Some((config, _)) => (config, true),
+                Some(config) => (config, true),
                 None => (Self::default(), false),
             },
         };
@@ -104,33 +104,16 @@ impl Config {
             config.language = Some(Language::system_default());
         }
 
-        if save_needed {
+        if migrated {
             config.save();
         }
         config
     }
 
-    fn read(path: Option<PathBuf>) -> Option<(Self, bool)> {
+    fn read(path: Option<PathBuf>) -> Option<Self> {
         let path = path?;
         let text = std::fs::read_to_string(path).ok()?;
-        Self::parse(&text)
-    }
-
-    /// Parses a config file. The flag reports whether the settings had to be
-    /// taken from the short-lived per-mode shape, which needs saving back.
-    fn parse(text: &str) -> Option<(Self, bool)> {
-        let mut config: Config = toml::from_str(text).ok()?;
-        let per_mode: PerModeFile = toml::from_str(text).unwrap_or_default();
-        let Some(active) = per_mode.active() else {
-            return Some((config, false));
-        };
-        config.layout = active.layout;
-        config.spacing = active.spacing;
-        config.align = active.align;
-        config.position = active.position;
-        config.opacity = active.opacity;
-        config.visible = active.visible.clone();
-        Some((config, true))
+        toml::from_str(&text).ok()
     }
 
     pub fn save(&self) {
@@ -142,62 +125,6 @@ impl Config {
         }
         if let Ok(text) = toml::to_string_pretty(self) {
             let _ = std::fs::write(path, text);
-        }
-    }
-}
-
-/// The shape the file briefly had while the settings were split per mode: two
-/// sets of them, under `[desktop]` and `[game]`, with `mode` naming the one in
-/// use. Kept only so such a file keeps what it was showing instead of resetting
-/// to the defaults; nothing writes this shape any more.
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct PerModeFile {
-    mode: Option<Mode>,
-    desktop: Option<ModeSettings>,
-    game: Option<ModeSettings>,
-}
-
-impl PerModeFile {
-    /// The set the file was left in, if this is a per-mode file at all.
-    fn active(&self) -> Option<&ModeSettings> {
-        let desktop = self.desktop.as_ref();
-        match self.mode.unwrap_or_default() {
-            Mode::Desktop => desktop,
-            Mode::Game => self.game.as_ref().or(desktop),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Mode {
-    #[default]
-    Desktop,
-    Game,
-}
-
-/// One of the two sets in a per-mode file; every field matches `Config`.
-#[derive(Clone, Deserialize)]
-#[serde(default)]
-struct ModeSettings {
-    layout: Layout,
-    spacing: Spacing,
-    align: Align,
-    position: Option<[f32; 2]>,
-    opacity: f32,
-    visible: BTreeMap<String, bool>,
-}
-
-impl Default for ModeSettings {
-    fn default() -> Self {
-        Self {
-            layout: Layout::Vertical,
-            spacing: Spacing::Tight,
-            align: Align::Left,
-            position: None,
-            opacity: DEFAULT_OPACITY,
-            visible: BTreeMap::new(),
         }
     }
 }
@@ -235,8 +162,7 @@ mod tests {
 
     #[test]
     fn missing_fields_fall_back_to_defaults() {
-        let (back, migrated) = Config::parse("layout = \"horizontal\"\n").unwrap();
-        assert!(!migrated);
+        let back: Config = toml::from_str("layout = \"horizontal\"\n").unwrap();
         assert_eq!(back.layout, Layout::Horizontal);
         assert_eq!(back.align, Align::Left);
         assert_eq!(back.refresh_secs, 1);
@@ -246,44 +172,11 @@ mod tests {
         assert!(back.visible.is_empty());
     }
 
-    /// A file from the brief per-mode era keeps whichever set was in use.
+    /// Keys for metrics that no longer exist are ignored, not fatal.
     #[test]
-    fn keeps_the_active_set_of_a_per_mode_file() {
-        let text = r#"
-mode = "game"
-refresh_secs = 3
-
-[desktop]
-layout = "vertical"
-opacity = 0.5
-
-[game]
-layout = "grid"
-align = "right"
-position = [40.0, 50.0]
-opacity = 0.85
-
-[game.visible]
-cpu = false
-"#;
-        let (config, migrated) = Config::parse(text).unwrap();
-        assert!(migrated);
-        assert_eq!(config.layout, Layout::Grid);
-        assert_eq!(config.align, Align::Right);
-        assert_eq!(config.position, Some([40.0, 50.0]));
-        assert_eq!(config.opacity, 0.85);
-        assert_eq!(config.visible.get("cpu"), Some(&false));
-        assert_eq!(config.refresh_secs, 3);
-
-        // The desktop set is used when that was the active one instead.
-        let desktop_active = text.replace("mode = \"game\"", "mode = \"desktop\"");
-        let (config, _) = Config::parse(&desktop_active).unwrap();
-        assert_eq!(config.layout, Layout::Vertical);
-        assert_eq!(config.opacity, 0.5);
-        assert!(config.visible.is_empty());
-
-        // Saving writes the flat shape, so the old one is left behind.
-        let saved = toml::to_string_pretty(&Config::parse(text).unwrap().0).unwrap();
-        assert!(!Config::parse(&saved).unwrap().1);
+    fn unknown_visibility_keys_are_kept_but_ignored() {
+        let back: Config = toml::from_str("[visible]\nnot_a_metric = true\ncpu = false\n").unwrap();
+        assert_eq!(back.visible.get("cpu"), Some(&false));
+        assert_eq!(back.visible.get("not_a_metric"), Some(&true));
     }
 }
