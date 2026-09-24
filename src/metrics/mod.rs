@@ -3,6 +3,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod gpu;
+mod gpu_mem;
 mod net;
 mod pawnio;
 mod system;
@@ -23,6 +24,8 @@ pub struct Snapshot {
     pub gpu_usage: Option<f32>,
     pub gpu_mem_used: Option<u64>,
     pub gpu_mem_total: Option<u64>,
+    /// Device-wide committed GPU memory (dedicated + borrowed from RAM).
+    pub gpu_mem_committed: Option<u64>,
     pub gpu_temp_c: Option<f32>,
 }
 
@@ -41,7 +44,15 @@ impl Snapshot {
     }
 
     pub fn vram_percent(&self) -> Option<f32> {
-        percent(self.gpu_mem_used, self.gpu_mem_total)
+        // Prefer the device-wide committed figure (dedicated + borrowed from
+        // system RAM), which is allowed to exceed 100%; fall back to NVML's
+        // dedicated usage when the performance counters are unavailable.
+        match (self.gpu_mem_committed, self.gpu_mem_total) {
+            (Some(committed), Some(total)) if total > 0 => {
+                Some(committed as f32 / total as f32 * 100.0)
+            }
+            _ => percent(self.gpu_mem_used, self.gpu_mem_total),
+        }
     }
 }
 
@@ -53,6 +64,7 @@ pub fn spawn(interval: Duration, lhm_port: u16, wake: impl Fn() + Send + 'static
         let mut system = system::SystemCollector::new();
         let mut net = net::NetCollector::new();
         let mut gpu = gpu::GpuCollector::new();
+        let mut gpu_mem = gpu_mem::GpuMemCollector::new();
         let mut temp = temp::TempCollector::new(lhm_port);
 
         // Prime the counters so the first real sample has a delta to compare against.
@@ -66,6 +78,7 @@ pub fn spawn(interval: Duration, lhm_port: u16, wake: impl Fn() + Send + 'static
             let (cpu_usage, mem_used, mem_total) = system.sample();
             let (net_up, net_down) = net.sample();
             let gpu_sample = gpu.sample();
+            let gpu_committed = gpu_mem.as_mut().and_then(|collector| collector.sample());
             let cpu_temp = temp.sample();
 
             if let Ok(mut snap) = out.lock() {
@@ -77,6 +90,7 @@ pub fn spawn(interval: Duration, lhm_port: u16, wake: impl Fn() + Send + 'static
                 snap.gpu_usage = gpu_sample.usage;
                 snap.gpu_mem_used = gpu_sample.mem_used;
                 snap.gpu_mem_total = gpu_sample.mem_total;
+                snap.gpu_mem_committed = gpu_committed.map(|(_, committed)| committed);
                 snap.gpu_temp_c = gpu_sample.temp_c;
                 snap.cpu_temp_c = cpu_temp;
             }

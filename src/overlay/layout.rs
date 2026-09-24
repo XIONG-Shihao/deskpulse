@@ -14,13 +14,25 @@ pub(super) struct Span {
     pub(super) value: bool,
 }
 
+/// Text colours: names stay muted so the values keep the visual lead; a value
+/// turns red once it crosses its warning threshold.
+const LABEL_COLOR: u32 = 0x00C0_C0C0;
+const VALUE_COLOR: u32 = 0x00FF_FFFF;
+const WARN_COLOR: u32 = 0x0050_50FF; // RGB(255, 80, 80)
+
 impl Overlay {
-    pub(super) fn rows(&self, snapshot: &Snapshot) -> Vec<(&'static str, String)> {
+    pub(super) fn rows(&self, snapshot: &Snapshot) -> Vec<(&'static str, String, bool)> {
         let t = self.text();
         Metric::ALL
             .iter()
             .filter(|metric| self.is_visible_metric(**metric))
-            .map(|metric| (metric.label(&t), metric.value(snapshot)))
+            .map(|metric| {
+                (
+                    metric.label(&t),
+                    metric.value(snapshot),
+                    metric.is_warning(snapshot),
+                )
+            })
             .collect()
     }
 
@@ -85,7 +97,7 @@ impl Overlay {
 
     pub(super) fn build_spans(
         &self,
-        rows: &[(&'static str, String)],
+        rows: &[(&'static str, String, bool)],
         label_w: f32,
         value_w: f32,
     ) -> Vec<Span> {
@@ -100,57 +112,64 @@ impl Overlay {
         let value_w = value_w.round() as i32;
 
         let mut spans = Vec::new();
-        let mut cell =
-            |x: i32, y: i32, label: &str, value: &str, label_align: u32, value_align: u32| {
-                let label_right = x + label_w;
-                let value_left = label_right + gap;
-                spans.push(Span {
-                    text: label.to_owned(),
-                    rect: Rect {
-                        left: x,
-                        top: y,
-                        right: label_right,
-                        bottom: y + row_h,
-                    },
-                    align: label_align,
-                    color: 0x96_96_96,
-                    value: false,
-                });
-                spans.push(Span {
-                    text: value.to_owned(),
-                    rect: Rect {
-                        left: value_left,
-                        top: y,
-                        right: value_left + value_w,
-                        bottom: y + row_h,
-                    },
-                    align: value_align,
-                    color: 0x00FF_FFFF,
-                    value: true,
-                });
-            };
+        let mut cell = |x: i32,
+                        y: i32,
+                        label: &str,
+                        value: &str,
+                        value_color: u32,
+                        label_align: u32,
+                        value_align: u32| {
+            let label_right = x + label_w;
+            let value_left = label_right + gap;
+            spans.push(Span {
+                text: label.to_owned(),
+                rect: Rect {
+                    left: x,
+                    top: y,
+                    right: label_right,
+                    bottom: y + row_h,
+                },
+                align: label_align,
+                color: LABEL_COLOR,
+                value: false,
+            });
+            spans.push(Span {
+                text: value.to_owned(),
+                rect: Rect {
+                    left: value_left,
+                    top: y,
+                    right: value_left + value_w,
+                    bottom: y + row_h,
+                },
+                align: value_align,
+                color: value_color,
+                value: true,
+            });
+        };
 
         match self.layout {
             Layout::Vertical => {
                 // Name flush left, 2pt gap, value immediately after.
-                for (index, (label, value)) in rows.iter().enumerate() {
+                for (index, (label, value, warn)) in rows.iter().enumerate() {
                     let y = m + index as i32 * (row_h + row_gap);
-                    cell(m, y, label, value, align, align);
+                    let color = if *warn { WARN_COLOR } else { VALUE_COLOR };
+                    cell(m, y, label, value, color, align, align);
                 }
             }
             Layout::Grid => {
                 let cell_w = label_w + gap + value_w;
-                for (index, (label, value)) in rows.iter().enumerate() {
+                for (index, (label, value, warn)) in rows.iter().enumerate() {
                     let column = (index % 2) as i32;
                     let line = (index / 2) as i32;
                     let y = m + line * (row_h + row_gap);
                     let x = m + column * cell_w;
-                    cell(x, y, label, value, align, align);
+                    let color = if *warn { WARN_COLOR } else { VALUE_COLOR };
+                    cell(x, y, label, value, color, align, align);
                 }
             }
             Layout::Horizontal => {
                 let col = label_w.max(value_w);
-                for (index, (label, value)) in rows.iter().enumerate() {
+                for (index, (label, value, warn)) in rows.iter().enumerate() {
                     let x = m + index as i32 * (col + col_gap);
                     spans.push(Span {
                         text: (*label).to_owned(),
@@ -161,7 +180,7 @@ impl Overlay {
                             bottom: m + row_h,
                         },
                         align,
-                        color: 0x96_96_96,
+                        color: LABEL_COLOR,
                         value: false,
                     });
                     spans.push(Span {
@@ -173,7 +192,7 @@ impl Overlay {
                             bottom: m + 2 * row_h + gap,
                         },
                         align,
-                        color: 0x00FF_FFFF,
+                        color: if *warn { WARN_COLOR } else { VALUE_COLOR },
                         value: true,
                     });
                 }
