@@ -126,7 +126,8 @@ deskpulse/
         ├── mod.rs           # Snapshot + collector thread + percentages
         ├── net.rs           # sysinfo network byte diff (filters virtual NICs)
         ├── system.rs        # sysinfo CPU usage + memory (one System)
-        ├── gpu.rs           # NVIDIA NVML: usage / VRAM / temperature
+        ├── gpu.rs           # NVIDIA NVML: usage / temperature
+        ├── gpu_mem.rs       # video memory from the GPU Adapter Memory counters
         ├── pawnio.rs        # CPU temperature straight from the PawnIO driver
         └── temp.rs          # temperature: PawnIO first, LHM HTTP fallback
 ```
@@ -181,7 +182,7 @@ Details about CPU temperature (why a kernel driver is required, the PawnIO proto
 - **Exclusive fullscreen cannot be overlaid, and not every "full screen" is the same.** The panel is a per-pixel-alpha layered window, so it exists only where DWM composites. A real exclusive fullscreen — the one Windows flags as `QUNS_RUNNING_D3D_FULL_SCREEN` — takes the display away from the desktop and stops DWM compositing that screen, and then **no non-injected window** can be drawn there: Task Manager with "always on top" is not visible either, and neither is the Windows volume bar. Every tool that does show numbers over it (RTSS / MSI Afterburner, Steam, Discord, the WeGame overlay) injects a DLL into the game, hooks its Present and draws inside the game's own frame; deskpulse does not inject (anti-cheat blocks it, and it risks bans).
   - **Shows:** Black Myth: Wukong (UE5 / DX12), Apex (`r5apex_dx12.exe`, DX12). A DX12 "full screen" is still a DWM-composited borderless window, so the panel stays visible.
   - **Does not show:** League of Legends (old D3D9 true-exclusive path), VALORANT (configured for exclusive fullscreen). In those fullscreen modes the panel really is not on screen; borderless or windowed puts it back.
-- GPU metrics depend on the NVIDIA driver (NVML). On non-NVIDIA GPUs these items show `--`.
+- GPU usage and temperature depend on the NVIDIA driver (NVML); a non-NVIDIA GPU shows `--` for those two. Video memory is read from the GPU performance counters, which exist for any adapter.
 - Unknown metrics always show `--`; `0` is never substituted for an unknown value.
 
 ## License

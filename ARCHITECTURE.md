@@ -11,7 +11,8 @@ This document records the current tech choices, architecture and key trade-offs.
 | Language | Rust, edition 2024 | Windows only (`x86_64-pc-windows-msvc`) |
 | GUI | Native Win32 layered window + GDI, hand-written FFI | Per-pixel-alpha `UpdateLayeredWindow`; no GPU API, no GUI framework |
 | Network / CPU / memory | `sysinfo` `0.39` | Interface byte counters, CPU usage, memory |
-| GPU | `nvml-wrapper` `0.13` | NVIDIA NVML: usage / VRAM / temperature (loads `nvml.dll` at runtime) |
+| GPU | `nvml-wrapper` `0.13` | NVIDIA NVML: usage / temperature (loads `nvml.dll` at runtime) |
+| Video memory | `pdh.dll` performance counters, hand-written FFI | `\GPU Adapter Memory(*)\{Dedicated,Total Committed}` for the device-wide figure |
 | CPU temperature (primary) | PawnIO kernel driver + hand-written FFI | No third-party Rust wrapper; uses `CreateFile` / `DeviceIoControl` directly |
 | CPU temperature (fallback) | `serde_json` + std `TcpStream` | Polls LibreHardwareMonitor's `http://127.0.0.1:8085/data.json` |
 | Tray / menus | `tray-icon` `0.25` (uses muda) | Tray icon and the native right-click menu |
@@ -72,7 +73,7 @@ Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► refresh(
 | `elevate.rs` | `TokenElevation` check + `ShellExecuteW("runas")` self-elevation |
 | `diag.rs` | Timestamped diagnostic log |
 | `metrics/mod.rs` | `Snapshot`, collector thread, percentage helpers |
-| `metrics/*.rs` | Individual collectors (net / system / gpu / pawnio / temp) |
+| `metrics/*.rs` | Individual collectors (net / system / gpu / gpu_mem / pawnio / temp) |
 
 ## 3. Metric data sources
 
@@ -81,7 +82,8 @@ Collectors ──sample()──► Snapshot ──(Arc<Mutex>)──► refresh(
 | Network speed | `sysinfo::Networks` cumulative bytes, time-differenced; loopback / virtual / VPN interfaces filtered out |
 | CPU usage | `sysinfo` `global_cpu_usage()` (one reused `System` instance) |
 | Memory | `sysinfo` `used_memory / total_memory` |
-| GPU | NVML: `utilization_rates` / `memory_info` / `temperature` |
+| GPU usage / temperature | NVML: `utilization_rates` / `temperature` |
+| Video memory | PDH `GPU Adapter Memory` counters: the adapter with the largest dedicated usage, reporting `Total Committed` (dedicated + borrowed from system RAM); NVML's dedicated-only `memory_info` as fallback |
 | CPU temperature | PawnIO direct first, LHM HTTP fallback (next section) |
 
 ## 4. CPU temperature: why a kernel driver is required
@@ -143,7 +145,7 @@ Modules come from [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Mod
 
 1. **The GUI was rewritten from `egui` / `wgpu` to a native Win32/GDI window.** The framework dragged in a GPU API and rendered every frame; on the dev machine the same overlay used a 125 MB working set with the OpenGL backend and 420 MB with WARP, at 3–40× the CPU. Drawing one small DIB by hand and pushing it with `UpdateLayeredWindow` costs ≈ 27 MB private / ≈ 43 MB working set and ≈ 0.29 % of one core, and it runs where no GPU API exists at all (Basic Display adapter, VMs, RDP).
 2. **CPU temperature moved from WMI to a direct PawnIO read.** Newer LibreHardwareMonitor (0.9.x) removed the WMI provider, so the old `root\LibreHardwareMonitor` approach no longer works; going further, to drop the dependency on a resident app we read the PawnIO driver directly. LHM HTTP is only a fallback.
-3. **GPU uses NVML only.** No generic PDH fallback; non-NVIDIA GPUs show `--`.
+3. **GPU usage and temperature use NVML; video memory does not.** The VRAM figure comes from the GPU performance counters, which exist for any adapter, and it is deliberately the device-wide committed number (dedicated plus what the GPU borrows from system RAM) rather than NVML's dedicated-only one — the dedicated-only figure can never exceed 100 %, which makes it useless for spotting an overcommitted GPU. A non-NVIDIA GPU shows `--` only for usage and temperature.
 4. **No custom driver, no embedded hidden helper.** The first is too costly to maintain; the second is treated as malware by AV.
 5. **Unknown means `--`.** Never substitute `0`.
 
@@ -152,5 +154,5 @@ Modules come from [namazso/PawnIO.Modules](https://github.com/namazso/PawnIO.Mod
 - Direct temperature reading needs admin; without it the app falls back to LHM (`--` if not installed).
 - **The overlay cannot be drawn over an exclusive-fullscreen app.** Windows hands the display to that app's swapchain and composites nothing on top of it, so no ordinary (non-injecting) application can appear there; borderless/windowed fullscreen is unaffected.
 - The Intel temperature path is implemented but not verified on an Intel machine (the dev machine is AMD).
-- Multiple GPUs: only `device_by_index(0)` is used.
+- Multiple GPUs: usage and temperature read `device_by_index(0)`; the VRAM counters pick whichever adapter has the largest dedicated usage.
 - No history graphs, no log persistence, only zh/en.

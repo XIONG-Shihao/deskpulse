@@ -126,7 +126,8 @@ deskpulse/
         ├── mod.rs           # Snapshot + 采集线程 + 百分比
         ├── net.rs           # sysinfo 网卡差分（过滤虚拟网卡）
         ├── system.rs        # sysinfo CPU 占用 + 内存（共用一个 System）
-        ├── gpu.rs           # NVIDIA NVML：占用 / 显存 / 温度
+        ├── gpu.rs           # NVIDIA NVML：占用 / 温度
+        ├── gpu_mem.rs       # 显存：取 GPU Adapter Memory 性能计数器
         ├── pawnio.rs        # PawnIO 内核驱动直读 CPU 温度
         └── temp.rs          # 温度：PawnIO 优先，LHM HTTP 退路
 ```
@@ -181,7 +182,7 @@ CPU 温度的细节（为什么必须内核驱动、PawnIO 协议、提权要求
 - **独占全屏无法叠加显示，而且不是所有「全屏」都一样。** 面板是逐像素透明的分层窗口，只有经过 DWM 合成才能出现在屏幕上。真正把显示器从桌面手上拿走的独占全屏（Windows 会用 `QUNS_RUNNING_D3D_FULL_SCREEN` 标记它）会让 DWM 停止合成那块屏，此时**任何非注入窗口**都画不上去——任务管理器勾了「置于顶层」也一样，Windows 自己的音量条也不显示。所有能在真独占上显示数字的工具（RTSS / MSI Afterburner、Steam、Discord、WeGame 的浮窗）都是把 DLL 注入游戏进程、hook 它的 Present，在游戏自己那一帧里画；deskpulse 不做注入（反作弊会拦，也有封号风险）。
   - **能显示**：黑神话：悟空（UE5 / DX12）、Apex（`r5apex_dx12.exe`，DX12）。DX12 游戏的「全屏」实际上仍是 DWM 合成的无边框全屏，所以面板照常可见。
   - **不能显示**：英雄联盟（走老的 D3D9 真独占路径）、瓦洛兰特（配置为独占全屏）。这两种全屏模式下面板确实不在画面上，改成「无边框」或「窗口」即可。
-- GPU 指标依赖 NVIDIA 驱动（NVML）。非 NVIDIA 显卡时相关项显示 `--`。
+- GPU 占用与温度依赖 NVIDIA 驱动（NVML），非 NVIDIA 显卡这两项显示 `--`；显存读 GPU 性能计数器，任何显卡都可用。
 - 未知指标一律显示 `--`，绝不用 `0` 冒充，以免误导。
 
 ## 许可证

@@ -11,7 +11,8 @@
 | 语言 | Rust，edition 2024 | 只做 Windows（`x86_64-pc-windows-msvc`） |
 | 界面 | 原生 Win32 分层窗口 + GDI，手写 FFI | 逐像素 alpha 的 `UpdateLayeredWindow`；不用任何 GPU API，也不用 GUI 框架 |
 | 网络 / CPU / 内存 | `sysinfo` `0.39` | 网卡累计字节、CPU 占用、内存 |
-| GPU | `nvml-wrapper` `0.13` | NVIDIA NVML：占用 / 显存 / 温度（运行时动态加载 `nvml.dll`） |
+| GPU | `nvml-wrapper` `0.13` | NVIDIA NVML：占用 / 温度（运行时动态加载 `nvml.dll`） |
+| 显存 | `pdh.dll` 性能计数器，手写 FFI | `\GPU Adapter Memory(*)\{Dedicated,Total Committed}`，取设备级口径 |
 | CPU 温度（主） | PawnIO 内核驱动 + 手写 FFI | 无第三方 Rust 封装，直接用 `CreateFile` / `DeviceIoControl` |
 | CPU 温度（退路） | `serde_json` + 标准库 `TcpStream` | 轮询 LibreHardwareMonitor 的 `http://127.0.0.1:8085/data.json` |
 | 托盘 / 菜单 | `tray-icon` `0.25`（内部用 muda） | 托盘图标与原生右键菜单 |
@@ -72,7 +73,7 @@ muda / 托盘事件线程（由 tray-icon 持有）
 | `elevate.rs` | `TokenElevation` 检测 + `ShellExecuteW("runas")` 自提权 |
 | `diag.rs` | 带时间戳的诊断日志 |
 | `metrics/mod.rs` | `Snapshot`、采集线程、百分比计算 |
-| `metrics/*.rs` | 各指标采集器（net / system / gpu / pawnio / temp） |
+| `metrics/*.rs` | 各指标采集器（net / system / gpu / gpu_mem / pawnio / temp） |
 
 ## 3. 指标数据源
 
@@ -81,7 +82,8 @@ muda / 托盘事件线程（由 tray-icon 持有）
 | 网速 | `sysinfo::Networks` 累计字节做时间差分；过滤 loopback / 虚拟 / VPN 网卡 |
 | CPU 占用 | `sysinfo` `global_cpu_usage()`（复用同一个 `System` 实例） |
 | 内存 | `sysinfo` `used_memory / total_memory` |
-| GPU | NVML：`utilization_rates` / `memory_info` / `temperature` |
+| GPU 占用 / 温度 | NVML：`utilization_rates` / `temperature` |
+| 显存 | PDH `GPU Adapter Memory` 计数器：取专用占用最大的适配器，读 `Total Committed`（专用 + 从系统内存借用）；回退到 NVML 的纯专用 `memory_info` |
 | CPU 温度 | PawnIO 直读优先，LHM HTTP 退路（见下节） |
 
 ## 4. CPU 温度：为什么需要内核驱动
@@ -143,7 +145,7 @@ Windows 没有可靠的公开 CPU 温度 API。核心温度只能读 **MSR**（I
 
 1. **界面从 `egui` / `wgpu` 重写为原生 Win32/GDI 窗口。** 原框架会拖入 GPU API 并且每帧都渲染；同一悬浮窗在开发机上用 OpenGL 后端工作集约 125 MB、WARP 后端约 420 MB，CPU 高 3–40 倍。改成自己画一张小 DIB、再用 `UpdateLayeredWindow` 交给系统后，约 27 MB 私有内存 / 43 MB 工作集、约 0.29% 单核，而且在完全没有 GPU API 的环境（基本显示适配器、虚拟机、远程桌面）也能跑。
 2. **CPU 温度从 WMI 改为 PawnIO 直读。** 新版 LibreHardwareMonitor（0.9.x）移除了 WMI provider，原 `root\LibreHardwareMonitor` 方案已失效；进一步地，为了摆脱对常驻 app 的依赖，改为直连 PawnIO 驱动。LHM HTTP 仅作退路。
-3. **GPU 只走 NVML。** 未实现 PDH 通用退路，非 NVIDIA 显卡相关项显示 `--`。
+3. **GPU 的占用/温度走 NVML，显存不走。** 显存取自 GPU 性能计数器（任何显卡都有），而且刻意用设备级 committed 口径（专用 + 从系统内存借用），而不是 NVML 的纯专用口径——纯专用永远不可能超过 100 %，看不出「显存不够、开始借用」这件事。非 NVIDIA 显卡只有占用和温度显示 `--`。
 4. **不做自研驱动、不内嵌隐藏检测程序。** 前者成本/维护过高，后者会被杀软视为恶意行为。
 5. **未知即 `--`。** 不用 `0` 冒充。
 
@@ -152,5 +154,5 @@ Windows 没有可靠的公开 CPU 温度 API。核心温度只能读 **MSR**（I
 - 直读温度需管理员；非管理员时回退 LHM（未安装则 `--`）。
 - **独占全屏应用上无法绘制浮窗。** Windows 会把显示输出交给该应用的交换链，不在其上合成任何窗口，因此任何「不注入」的普通应用都无法显示在其上方；「无边框／窗口化全屏」不受影响。
 - Intel 温度路径已实现但未在 Intel 机器上验证（开发机为 AMD）。
-- 多 GPU 只取 `device_by_index(0)`。
+- 多 GPU：占用/温度取 `device_by_index(0)`；显存计数器取专用占用最大的那个适配器。
 - 未做历史曲线、日志持久化、多语言（仅中/英）。
