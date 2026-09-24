@@ -8,7 +8,9 @@ mod format;
 mod i18n;
 mod metrics;
 mod overlay;
+mod single_instance;
 mod tray;
+mod wide;
 
 use std::time::Duration;
 
@@ -18,11 +20,29 @@ fn main() {
         return;
     }
 
+    // Avoid a redundant UAC prompt when an elevated copy is already running.
+    // Append to the log (never reset it): the running instance owns it.
+    if single_instance::is_running() {
+        diag::log("another instance is already running; exiting");
+        return;
+    }
+
     // CPU temperature needs the PawnIO driver, which requires elevation.
     // Relaunch elevated if we are not already (no-op under the logon task).
     if elevate::ensure_elevated() {
         return;
     }
+
+    // Keep the mutex handle alive for the entire message loop. The second
+    // check also covers two launches racing through the elevation prompt.
+    let _single_instance = match single_instance::acquire() {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            diag::log(&format!("single-instance mutex failed: {error}"));
+            return;
+        }
+    };
 
     diag::reset("deskpulse started");
     overlay::enable_dpi_awareness();

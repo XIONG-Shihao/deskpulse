@@ -8,6 +8,8 @@
 
 use std::ffi::c_void;
 
+use crate::wide::wide;
+
 const TOKEN_QUERY: u32 = 0x0008;
 const TOKEN_ELEVATION: u32 = 20;
 const SW_SHOWNORMAL: i32 = 1;
@@ -63,10 +65,6 @@ fn is_elevated() -> bool {
     }
 }
 
-fn to_wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 /// Relaunches this executable elevated. Returns true if a new elevated process
 /// was started (the caller should then exit).
 pub fn ensure_elevated() -> bool {
@@ -78,8 +76,8 @@ pub fn ensure_elevated() -> bool {
         return false;
     };
 
-    let operation = to_wide("runas");
-    let file = to_wide(&exe.to_string_lossy());
+    let operation = wide("runas");
+    let file = wide(&exe.to_string_lossy());
     // SAFETY: valid NUL-terminated strings, no parameters, no working dir.
     let result = unsafe {
         ShellExecuteW(
