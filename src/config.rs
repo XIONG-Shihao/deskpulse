@@ -34,26 +34,13 @@ pub enum Align {
     Right,
 }
 
-/// Which settings set is in use.
-///
-/// The two sets are independent, so a game preset (fewer metrics, another
-/// corner, more opaque) can coexist with the desktop one and be switched with
-/// two clicks instead of being retyped every time.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    #[default]
-    Desktop,
-    Game,
-}
+/// Default panel alpha, unchanged since the first release.
+const DEFAULT_OPACITY: f32 = 0.72;
 
-/// Default panel opacity, kept from before the modes existed.
-pub const DEFAULT_OPACITY: f32 = 0.72;
-
-/// The settings that differ between the modes.
+/// User settings persisted to `%APPDATA%\deskpulse\config.toml`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ModeSettings {
+pub struct Config {
     pub layout: Layout,
     /// Cell spacing preset.
     pub spacing: Spacing,
@@ -61,52 +48,32 @@ pub struct ModeSettings {
     pub align: Align,
     /// Top-left window position in physical pixels, if it has been moved yet.
     pub position: Option<[f32; 2]>,
+    /// Refresh interval for the metric sampler, in seconds.
+    pub refresh_secs: u64,
     /// Background alpha, 0.0 (invisible) ..= 1.0 (opaque).
     pub opacity: f32,
+    pub autostart: bool,
+    /// Port of LibreHardwareMonitor's HTTP server (used for CPU temperature).
+    pub lhm_port: u16,
+    /// `None` until resolved, so the system language can be detected on first run.
+    pub language: Option<Language>,
     /// Per-metric visibility, keyed by `Metric::id`. Missing keys are visible.
     pub visible: BTreeMap<String, bool>,
 }
 
-impl Default for ModeSettings {
+impl Default for Config {
     fn default() -> Self {
         Self {
             layout: Layout::Vertical,
             spacing: Spacing::Tight,
             align: Align::Left,
             position: None,
-            opacity: DEFAULT_OPACITY,
-            visible: BTreeMap::new(),
-        }
-    }
-}
-
-/// User settings persisted to `%APPDATA%\deskpulse\config.toml`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Config {
-    /// The mode whose settings are in use; remembered across restarts.
-    pub mode: Mode,
-    pub desktop: ModeSettings,
-    pub game: ModeSettings,
-    /// Refresh interval for the metric sampler, in seconds.
-    pub refresh_secs: u64,
-    pub autostart: bool,
-    /// Port of LibreHardwareMonitor's HTTP server (used for CPU temperature).
-    pub lhm_port: u16,
-    /// `None` until resolved, so the system language can be detected on first run.
-    pub language: Option<Language>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            mode: Mode::Desktop,
-            desktop: ModeSettings::default(),
-            game: ModeSettings::default(),
             refresh_secs: 1,
+            opacity: DEFAULT_OPACITY,
             autostart: false,
             lhm_port: 8085,
             language: None,
+            visible: BTreeMap::new(),
         }
     }
 }
@@ -121,22 +88,6 @@ impl Config {
     fn legacy_path() -> Option<PathBuf> {
         let base = std::env::var_os("APPDATA")?;
         Some(PathBuf::from(base).join("desk-stats").join("config.toml"))
-    }
-
-    /// The settings of the mode currently in use.
-    pub fn active(&self) -> &ModeSettings {
-        match self.mode {
-            Mode::Desktop => &self.desktop,
-            Mode::Game => &self.game,
-        }
-    }
-
-    /// The settings of the mode currently in use, for editing.
-    pub fn active_mut(&mut self) -> &mut ModeSettings {
-        match self.mode {
-            Mode::Desktop => &mut self.desktop,
-            Mode::Game => &mut self.game,
-        }
     }
 
     pub fn load() -> Self {
@@ -165,19 +116,21 @@ impl Config {
         Self::parse(&text)
     }
 
-    /// Parses a config file. The flag reports whether the file was still in the
-    /// flat, pre-modes format and therefore needs saving back.
+    /// Parses a config file. The flag reports whether the settings had to be
+    /// taken from the short-lived per-mode shape, which needs saving back.
     fn parse(text: &str) -> Option<(Self, bool)> {
         let mut config: Config = toml::from_str(text).ok()?;
-        let flat: Flat = toml::from_str(text).unwrap_or_default();
-        let migrated = flat.any();
-        if migrated {
-            flat.apply(&mut config.desktop);
-            // The game preset starts as a copy of the desktop one, so switching
-            // modes never changes what is shown until the user edits it.
-            config.game = config.desktop.clone();
-        }
-        Some((config, migrated))
+        let per_mode: PerModeFile = toml::from_str(text).unwrap_or_default();
+        let Some(active) = per_mode.active() else {
+            return Some((config, false));
+        };
+        config.layout = active.layout;
+        config.spacing = active.spacing;
+        config.align = active.align;
+        config.position = active.position;
+        config.opacity = active.opacity;
+        config.visible = active.visible.clone();
+        Some((config, true))
     }
 
     pub fn save(&self) {
@@ -193,48 +146,58 @@ impl Config {
     }
 }
 
-/// The settings as they were before the modes existed: all of them lived at the
-/// top level of the file and now belong to the desktop mode. Every field is
-/// optional so a file with none of them is simply "not legacy".
+/// The shape the file briefly had while the settings were split per mode: two
+/// sets of them, under `[desktop]` and `[game]`, with `mode` naming the one in
+/// use. Kept only so such a file keeps what it was showing instead of resetting
+/// to the defaults; nothing writes this shape any more.
 #[derive(Default, Deserialize)]
 #[serde(default)]
-struct Flat {
-    layout: Option<Layout>,
-    spacing: Option<Spacing>,
-    align: Option<Align>,
-    position: Option<[f32; 2]>,
-    opacity: Option<f32>,
-    visible: Option<BTreeMap<String, bool>>,
+struct PerModeFile {
+    mode: Option<Mode>,
+    desktop: Option<ModeSettings>,
+    game: Option<ModeSettings>,
 }
 
-impl Flat {
-    fn any(&self) -> bool {
-        self.layout.is_some()
-            || self.spacing.is_some()
-            || self.align.is_some()
-            || self.position.is_some()
-            || self.opacity.is_some()
-            || self.visible.is_some()
+impl PerModeFile {
+    /// The set the file was left in, if this is a per-mode file at all.
+    fn active(&self) -> Option<&ModeSettings> {
+        let desktop = self.desktop.as_ref();
+        match self.mode.unwrap_or_default() {
+            Mode::Desktop => desktop,
+            Mode::Game => self.game.as_ref().or(desktop),
+        }
     }
+}
 
-    fn apply(self, settings: &mut ModeSettings) {
-        if let Some(value) = self.layout {
-            settings.layout = value;
-        }
-        if let Some(value) = self.spacing {
-            settings.spacing = value;
-        }
-        if let Some(value) = self.align {
-            settings.align = value;
-        }
-        if let Some(value) = self.position {
-            settings.position = Some(value);
-        }
-        if let Some(value) = self.opacity {
-            settings.opacity = value;
-        }
-        if let Some(value) = self.visible {
-            settings.visible = value;
+#[derive(Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Mode {
+    #[default]
+    Desktop,
+    Game,
+}
+
+/// One of the two sets in a per-mode file; every field matches `Config`.
+#[derive(Clone, Deserialize)]
+#[serde(default)]
+struct ModeSettings {
+    layout: Layout,
+    spacing: Spacing,
+    align: Align,
+    position: Option<[f32; 2]>,
+    opacity: f32,
+    visible: BTreeMap<String, bool>,
+}
+
+impl Default for ModeSettings {
+    fn default() -> Self {
+        Self {
+            layout: Layout::Vertical,
+            spacing: Spacing::Tight,
+            align: Align::Left,
+            position: None,
+            opacity: DEFAULT_OPACITY,
+            visible: BTreeMap::new(),
         }
     }
 }
@@ -243,101 +206,84 @@ impl Flat {
 mod tests {
     use super::*;
 
-    fn sample() -> Config {
+    #[test]
+    fn round_trips_all_fields() {
         let mut visible = BTreeMap::new();
         visible.insert("gpu".to_owned(), false);
-        Config {
-            mode: Mode::Game,
-            desktop: ModeSettings {
-                opacity: 0.5,
-                ..ModeSettings::default()
-            },
-            game: ModeSettings {
-                layout: Layout::Horizontal,
-                spacing: Spacing::Loose,
-                align: Align::Center,
-                position: Some([12.0, 34.0]),
-                opacity: 0.85,
-                visible: visible.clone(),
-            },
+        let config = Config {
+            layout: Layout::Horizontal,
+            spacing: Spacing::Loose,
+            align: Align::Center,
+            position: Some([12.0, 34.0]),
             refresh_secs: 2,
+            opacity: 0.5,
             autostart: true,
             lhm_port: 8085,
             language: Some(Language::En),
-        }
-    }
-
-    #[test]
-    fn round_trips_all_fields() {
-        let config = sample();
+            visible: visible.clone(),
+        };
         let text = toml::to_string_pretty(&config).unwrap();
         let back: Config = toml::from_str(&text).unwrap();
-        assert_eq!(back.mode, Mode::Game);
-        assert_eq!(back.desktop.opacity, 0.5);
-        assert_eq!(back.game.layout, Layout::Horizontal);
-        assert_eq!(back.game.align, Align::Center);
-        assert_eq!(back.game.position, Some([12.0, 34.0]));
+        assert_eq!(back.layout, Layout::Horizontal);
+        assert_eq!(back.align, Align::Center);
+        assert_eq!(back.position, Some([12.0, 34.0]));
         assert_eq!(back.refresh_secs, 2);
         assert!(back.autostart);
         assert_eq!(back.language, Some(Language::En));
-        assert_eq!(back.game.visible, sample().game.visible);
-    }
-
-    #[test]
-    fn active_follows_the_mode() {
-        let mut config = sample();
-        assert_eq!(config.active().opacity, 0.85);
-        config.mode = Mode::Desktop;
-        assert_eq!(config.active().opacity, 0.5);
-        config.active_mut().opacity = 0.9;
-        assert_eq!(config.desktop.opacity, 0.9);
-        assert_eq!(config.game.opacity, 0.85);
+        assert_eq!(back.visible, visible);
     }
 
     #[test]
     fn missing_fields_fall_back_to_defaults() {
-        let (back, migrated) = Config::parse("game = { layout = \"grid\" }\n").unwrap();
+        let (back, migrated) = Config::parse("layout = \"horizontal\"\n").unwrap();
         assert!(!migrated);
-        assert_eq!(back.mode, Mode::Desktop);
-        assert_eq!(back.game.layout, Layout::Grid);
-        assert_eq!(back.game.opacity, DEFAULT_OPACITY);
-        assert_eq!(back.desktop.layout, Layout::Vertical);
+        assert_eq!(back.layout, Layout::Horizontal);
+        assert_eq!(back.align, Align::Left);
         assert_eq!(back.refresh_secs, 1);
-        assert!(back.desktop.position.is_none());
+        assert_eq!(back.opacity, DEFAULT_OPACITY);
+        assert!(back.position.is_none());
         assert!(back.language.is_none());
-        assert!(back.desktop.visible.is_empty());
+        assert!(back.visible.is_empty());
     }
 
-    /// A file written before the modes existed keeps its settings: they move
-    /// into the desktop mode, and the game mode starts as a copy of them.
+    /// A file from the brief per-mode era keeps whichever set was in use.
     #[test]
-    fn migrates_the_flat_format_into_the_desktop_mode() {
+    fn keeps_the_active_set_of_a_per_mode_file() {
         let text = r#"
-layout = "horizontal"
-align = "right"
-position = [40.0, 50.0]
-opacity = 0.45
+mode = "game"
 refresh_secs = 3
 
-[visible]
+[desktop]
+layout = "vertical"
+opacity = 0.5
+
+[game]
+layout = "grid"
+align = "right"
+position = [40.0, 50.0]
+opacity = 0.85
+
+[game.visible]
 cpu = false
 "#;
         let (config, migrated) = Config::parse(text).unwrap();
         assert!(migrated);
-        assert_eq!(config.desktop.layout, Layout::Horizontal);
-        assert_eq!(config.desktop.align, Align::Right);
-        assert_eq!(config.desktop.position, Some([40.0, 50.0]));
-        assert_eq!(config.desktop.opacity, 0.45);
-        assert_eq!(config.desktop.visible.get("cpu"), Some(&false));
+        assert_eq!(config.layout, Layout::Grid);
+        assert_eq!(config.align, Align::Right);
+        assert_eq!(config.position, Some([40.0, 50.0]));
+        assert_eq!(config.opacity, 0.85);
+        assert_eq!(config.visible.get("cpu"), Some(&false));
         assert_eq!(config.refresh_secs, 3);
-        // the game mode is a copy, so nothing changes on a mode switch
-        assert_eq!(config.game.layout, Layout::Horizontal);
-        assert_eq!(config.game.visible, config.desktop.visible);
-        // and a mode that was never mentioned stays on its default
-        assert_eq!(config.mode, Mode::Desktop);
 
-        // Saving writes the new shape, so the migration happens only once.
-        let saved = toml::to_string_pretty(&config).unwrap();
+        // The desktop set is used when that was the active one instead.
+        let desktop_active = text.replace("mode = \"game\"", "mode = \"desktop\"");
+        let (config, _) = Config::parse(&desktop_active).unwrap();
+        assert_eq!(config.layout, Layout::Vertical);
+        assert_eq!(config.opacity, 0.5);
+        assert!(config.visible.is_empty());
+
+        // Saving writes the flat shape, so the old one is left behind.
+        let saved = toml::to_string_pretty(&Config::parse(text).unwrap().0).unwrap();
         assert!(!Config::parse(&saved).unwrap().1);
     }
 }

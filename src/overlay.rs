@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use tray_icon::menu::ContextMenu;
 
 use crate::autostart::Autostart;
-use crate::config::{Align, Config, ModeSettings};
+use crate::config::{Align, Config};
 use crate::i18n::{Language, Text};
 use crate::metrics::{self, Shared, Snapshot};
 use crate::tray::Tray;
@@ -136,6 +136,13 @@ impl Overlay {
         let autostart = Autostart::new();
         let mut config = config;
         config.autostart = autostart.is_enabled();
+        // Remove visibility entries left behind by a metric that no longer
+        // exists, so the config file does not accumulate dead keys.
+        let before = config.visible.len();
+        config.visible.retain(|id, _| Metric::from_id(id).is_some());
+        if config.visible.len() != before {
+            config.save();
+        }
         let language = config.language.unwrap_or(Language::Zh);
         Self {
             hwnd: 0,
@@ -177,11 +184,6 @@ impl Overlay {
         self.language.text()
     }
 
-    /// The settings of the mode currently in use.
-    fn settings(&self) -> &ModeSettings {
-        self.config.active()
-    }
-
     /// The notice shown while — and for a few seconds after — a game holds the
     /// display in exclusive fullscreen. The panel cannot be composited during
     /// that, so the lingering part is the only readable one.
@@ -213,7 +215,7 @@ impl Overlay {
     }
 
     fn is_visible_metric(&self, metric: Metric) -> bool {
-        self.settings()
+        self.config
             .visible
             .get(metric.id())
             .copied()
@@ -221,10 +223,7 @@ impl Overlay {
     }
 
     fn set_visible_metric(&mut self, metric: Metric, visible: bool) {
-        self.config
-            .active_mut()
-            .visible
-            .insert(metric.id().to_owned(), visible);
+        self.config.visible.insert(metric.id().to_owned(), visible);
         self.config.save();
         self.refresh();
     }
@@ -250,7 +249,7 @@ impl Overlay {
             RegisterClassW(&class);
 
             let (x, y) = self
-                .settings()
+                .config
                 .position
                 .map(|[x, y]| (x as i32, y as i32))
                 .unwrap_or((100, 100));
@@ -488,7 +487,7 @@ impl Overlay {
                 0,
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            self.config.active_mut().position = Some([x as f32, y as f32]);
+            self.config.position = Some([x as f32, y as f32]);
         }
     }
 

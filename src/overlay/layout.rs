@@ -46,7 +46,7 @@ impl Overlay {
 
     /// Vertical distance between rows for the current spacing preset.
     pub(super) fn row_gap(&self) -> f32 {
-        match self.settings().spacing {
+        match self.config.spacing {
             Spacing::Tight => 1.0,
             Spacing::Loose => 2.0,
         }
@@ -54,7 +54,7 @@ impl Overlay {
 
     /// `DrawTextW` flags selecting the configured text alignment.
     pub(super) fn align_dt(&self) -> u32 {
-        match self.settings().align {
+        match self.config.align {
             Align::Left => 0,
             Align::Center => DT_CENTER,
             Align::Right => DT_RIGHT,
@@ -79,7 +79,7 @@ impl Overlay {
         let label_w = label_w.round() as i32;
         let value_w = value_w.round() as i32;
         let count = rows.max(1) as i32;
-        match self.settings().layout {
+        match self.config.layout {
             Layout::Vertical => (
                 m * 2 + label_w + gap + value_w,
                 m * 2 + count * row_h + (count - 1) * row_gap,
@@ -153,7 +153,7 @@ impl Overlay {
             });
         };
 
-        match self.settings().layout {
+        match self.config.layout {
             Layout::Vertical => {
                 // Name flush left, 2pt gap, value immediately after.
                 for (index, (label, value, warn)) in rows.iter().enumerate() {
