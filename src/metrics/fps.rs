@@ -22,7 +22,7 @@
 //!   collector is simply not created.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 /// Session name is ours; anything stale with this name is stopped first.
@@ -60,6 +60,11 @@ static TARGET_PID: AtomicU32 = AtomicU32::new(0);
 static PRESENTS: AtomicUsize = AtomicUsize::new(0);
 /// Handle of the running session, so it can be stopped on exit.
 static SESSION: AtomicU64 = AtomicU64::new(0);
+/// Diagnostic: set once the consumer has delivered any DXGI event, which proves
+/// the real-time pipeline (session, provider, consumer, record layout) works.
+static FIRST_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
+/// Diagnostic: set once a `Present` was counted for the watched process.
+static FIRST_PRESENT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -291,11 +296,20 @@ unsafe extern "system" fn on_event(record: *mut EventRecord) {
     }
     // SAFETY: ETW guarantees the record is valid for the duration of the call.
     let header = unsafe { (*record).header };
-    if header.provider_id != DXGI_PROVIDER || header.descriptor.id != PRESENT_START_ID {
+    if header.provider_id != DXGI_PROVIDER {
+        return;
+    }
+    if !FIRST_EVENT_LOGGED.swap(true, Ordering::Relaxed) {
+        crate::diag::log("fps: real-time consumer is receiving DXGI events");
+    }
+    if header.descriptor.id != PRESENT_START_ID {
         return;
     }
     let target = TARGET_PID.load(Ordering::Relaxed);
     if target != 0 && header.process_id == target {
+        if !FIRST_PRESENT_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::diag::log(&format!("fps: counting presents for pid {target}"));
+        }
         PRESENTS.fetch_add(1, Ordering::Relaxed);
     }
 }
