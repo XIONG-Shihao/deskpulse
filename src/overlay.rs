@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tray_icon::menu::ContextMenu;
 
@@ -79,7 +79,6 @@ use win32::*;
 
 mod canvas;
 mod dpi;
-mod fullscreen;
 mod layout;
 mod menu;
 mod metric;
@@ -99,9 +98,6 @@ const COLUMN_GAP: f32 = 4.0;
 const ROW_H: f32 = 17.0;
 const LABEL_SIZE: f32 = 12.0;
 const VALUE_SIZE: f32 = 14.0;
-/// How long the exclusive-fullscreen notice stays up after the game releases
-/// the display, so it can actually be read.
-const FULLSCREEN_HINT_LINGER: Duration = Duration::from_secs(10);
 
 static INSTANCE: AtomicPtr<Overlay> = AtomicPtr::new(std::ptr::null_mut());
 static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -125,10 +121,6 @@ pub struct Overlay {
     dragging: Option<(i32, i32, i32, i32)>,
     /// Whether the last foreground-change check found us covered.
     topmost_covered: bool,
-    /// Whether the last poll found a real exclusive-fullscreen app.
-    exclusive_now: bool,
-    /// While in the future, the panel shows the exclusive-fullscreen notice.
-    hint_until: Option<Instant>,
 }
 
 impl Overlay {
@@ -162,8 +154,6 @@ impl Overlay {
             visible: true,
             dragging: None,
             topmost_covered: false,
-            exclusive_now: false,
-            hint_until: None,
         }
     }
 
@@ -182,36 +172,6 @@ impl Overlay {
 
     fn text(&self) -> Text {
         self.language.text()
-    }
-
-    /// The notice shown while — and for a few seconds after — a game holds the
-    /// display in exclusive fullscreen. The panel cannot be composited during
-    /// that, so the lingering part is the only readable one.
-    fn fullscreen_hint(&self) -> Option<(&'static str, &'static str)> {
-        let until = self.hint_until?;
-        if Instant::now() >= until {
-            return None;
-        }
-        let t = self.text();
-        Some((t.hint_label, t.hint_value))
-    }
-
-    /// Keeps the exclusive-fullscreen notice up to date. Called on every tick,
-    /// before the visibility check, so the deadline is right even when the
-    /// panel is hidden.
-    fn poll_fullscreen(&mut self) {
-        let exclusive = fullscreen::exclusive_fullscreen();
-        if exclusive != self.exclusive_now {
-            self.exclusive_now = exclusive;
-            crate::diag::log(if exclusive {
-                "fullscreen: exclusive D3D app detected; the panel cannot be composited"
-            } else {
-                "fullscreen: exclusive mode released"
-            });
-        }
-        if exclusive {
-            self.hint_until = Some(Instant::now() + FULLSCREEN_HINT_LINGER);
-        }
     }
 
     fn is_visible_metric(&self, metric: Metric) -> bool {
@@ -329,7 +289,6 @@ impl Overlay {
     // ------------------------------------------------------------- layout
 
     fn refresh(&mut self) {
-        self.poll_fullscreen();
         if self.hwnd == 0 || !self.visible {
             return;
         }
@@ -345,19 +304,11 @@ impl Overlay {
         // Reserve the columns from the metric set, not from the current values:
         // the label from the labels, the value from the widest string each
         // visible metric can render, so the panel width never grows with data.
-        // The temporary fullscreen notice is part of the reservation while it
-        // is up, so its longer text is never clipped.
-        let hint = self.fullscreen_hint();
-        let (mut label_w, mut value_w) = (0.0_f32, 0.0_f32);
-        if let (Some(metrics), Some((label, value))) = (self.metrics.as_ref(), hint) {
-            label_w = metrics.width(label, false);
-            value_w = metrics.width(value, true);
-        }
         let (label_w, value_w) = match self.metrics.as_ref() {
             Some(metrics) => Metric::ALL
                 .iter()
                 .filter(|metric| self.is_visible_metric(**metric))
-                .fold((label_w, value_w), |(label_w, value_w), metric| {
+                .fold((0.0_f32, 0.0_f32), |(label_w, value_w), metric| {
                     let label = metrics.width(metric.label(&text), false).max(label_w);
                     let value = metric
                         .widest_values()
@@ -366,10 +317,7 @@ impl Overlay {
                         .fold(value_w, f32::max);
                     (label, value)
                 }),
-            None => (
-                (46.0 * self.scale).max(label_w),
-                (74.0 * self.scale).max(value_w),
-            ),
+            None => (46.0 * self.scale, 74.0 * self.scale),
         };
         let (label_w, value_w) = (label_w.ceil(), value_w.ceil());
 
