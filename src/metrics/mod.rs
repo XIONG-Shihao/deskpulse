@@ -2,11 +2,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-mod cpu;
 mod gpu;
-mod mem;
 mod net;
 mod pawnio;
+mod system;
 mod temp;
 
 /// A point-in-time view of all metrics.
@@ -51,22 +50,20 @@ pub fn spawn(interval: Duration, lhm_port: u16, wake: impl Fn() + Send + 'static
     let out = Arc::clone(&shared);
 
     thread::spawn(move || {
-        let mut cpu = cpu::CpuCollector::new();
-        let mut mem = mem::MemCollector::new();
+        let mut system = system::SystemCollector::new();
         let mut net = net::NetCollector::new();
         let mut gpu = gpu::GpuCollector::new();
         let mut temp = temp::TempCollector::new(lhm_port);
 
         // Prime the counters so the first real sample has a delta to compare against.
-        cpu.sample();
+        system.sample();
         net.sample();
         thread::sleep(Duration::from_millis(500));
 
         loop {
             let started = Instant::now();
 
-            let cpu_usage = cpu.sample();
-            let (mem_used, mem_total) = mem.sample();
+            let (cpu_usage, mem_used, mem_total) = system.sample();
             let (net_up, net_down) = net.sample();
             let gpu_sample = gpu.sample();
             let cpu_temp = temp.sample();

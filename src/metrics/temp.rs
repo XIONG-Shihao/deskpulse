@@ -109,7 +109,7 @@ impl TempCollector {
 }
 
 fn fetch_json(port: u16) -> Option<String> {
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).ok()?;
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
