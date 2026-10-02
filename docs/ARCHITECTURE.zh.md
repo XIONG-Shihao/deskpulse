@@ -1,6 +1,6 @@
 # deskpulse 技术栈与架构
 
-[English](ARCHITECTURE.md) | 中文
+[English](../ARCHITECTURE.md) | 中文
 
 本文档记录当前实现的技术选型、架构与关键取舍。功能和使用说明见 [README.zh.md](README.zh.md)。
 

@@ -1,6 +1,6 @@
 # deskpulse — Tech Stack and Architecture
 
-English | [中文](ARCHITECTURE.zh.md)
+English | [中文](docs/ARCHITECTURE.zh.md)
 
 This document records the current tech choices, architecture and key trade-offs. For features and usage see [README.md](README.md).
 
