@@ -25,6 +25,16 @@ pub(super) struct Size {
     pub(super) cy: i32,
 }
 
+/// `MONITORINFO`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct MonitorInfo {
+    pub(super) size: u32,
+    pub(super) monitor: Rect,
+    pub(super) work: Rect,
+    pub(super) flags: u32,
+}
+
 #[repr(C)]
 #[derive(Default)]
 pub(super) struct Msg {
@@ -135,6 +145,8 @@ unsafe extern "system" {
     pub(super) fn ShowWindow(hwnd: isize, command: i32) -> i32;
     pub(super) fn LoadCursorW(instance: isize, name: isize) -> isize;
     pub(super) fn GetDpiForWindow(hwnd: isize) -> u32;
+    pub(super) fn MonitorFromWindow(hwnd: isize, flags: u32) -> isize;
+    pub(super) fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
     pub(super) fn SetProcessDpiAwarenessContext(value: isize) -> i32;
     pub(super) fn SetProcessDPIAware() -> i32;
     pub(super) fn UpdateLayeredWindow(

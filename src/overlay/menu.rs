@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
-use crate::config::{Align, Layout, Spacing};
+use crate::config::{Align, Layout, MAX_SCALE_PERCENT, MIN_SCALE_PERCENT, Spacing};
 use crate::i18n::Language;
 
 use super::metric::Metric;
@@ -13,6 +13,11 @@ use super::*;
 /// Panel opacity presets offered by the menu. Six steps, keeping the historical
 /// default (0.72) as one of them; the config field still accepts any value.
 const OPACITY_LEVELS: [f32; 6] = [0.30, 0.45, 0.60, 0.72, 0.85, 1.00];
+
+/// UI scale presets offered by the menu, in percent. `100` follows the
+/// monitor's display scaling; the rest enlarge or shrink the panel on top of
+/// it. The config field accepts 25–400.
+const SCALE_LEVELS: [u32; 6] = [50, 75, 100, 125, 150, 175];
 
 impl Overlay {
     pub(super) fn install_menu_handler(&self) {
@@ -112,6 +117,15 @@ impl Overlay {
         }
         let _ = menu.append(&opacity);
 
+        let scale = Submenu::new(t.scale, true);
+        for level in SCALE_LEVELS {
+            let id = format!("scale_{level}");
+            let label = format!("{level}%");
+            let selected = self.config.scale_percent == level;
+            let _ = scale.append(&CheckMenuItem::with_id(id, label, true, selected, None));
+        }
+        let _ = menu.append(&scale);
+
         let language = Submenu::new(t.language, true);
         let _ = language.append(&CheckMenuItem::with_id(
             "lang_zh",
@@ -190,6 +204,8 @@ impl Overlay {
                 other => {
                     if let Some(opacity) = opacity_from_menu_id(other) {
                         self.set_opacity(opacity);
+                    } else if let Some(percent) = scale_from_menu_id(other) {
+                        self.set_scale(percent);
                     } else if let Some(metric) = Metric::from_id(other) {
                         let visible = !self.is_visible_metric(metric);
                         self.set_visible_metric(metric, visible);
@@ -256,6 +272,17 @@ impl Overlay {
         self.refresh();
     }
 
+    /// Scales the whole panel: fonts, rows, margins and corner radius are all
+    /// derived from the layout scale, so one value moves everything.
+    pub(super) fn set_scale(&mut self, percent: u32) {
+        if self.config.scale_percent == percent {
+            return;
+        }
+        self.config.scale_percent = percent;
+        self.config.save();
+        self.apply_scale();
+    }
+
     pub(super) fn set_language(&mut self, language: Language) {
         if self.language == language {
             return;
@@ -281,9 +308,19 @@ pub(super) fn opacity_from_menu_id(id: &str) -> Option<f32> {
     (1..=100).contains(&percent).then(|| percent as f32 / 100.0)
 }
 
+/// Parses a menu id such as `scale_150` into a scale percentage inside the
+/// range the config accepts.
+pub(super) fn scale_from_menu_id(id: &str) -> Option<u32> {
+    let percent: u32 = id.strip_prefix("scale_")?.parse().ok()?;
+    (MIN_SCALE_PERCENT..=MAX_SCALE_PERCENT)
+        .contains(&percent)
+        .then_some(percent)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::opacity_from_menu_id;
+    use super::{opacity_from_menu_id, scale_from_menu_id};
+    use crate::config::{MAX_SCALE_PERCENT, MIN_SCALE_PERCENT};
 
     #[test]
     pub(super) fn parses_opacity_menu_ids() {
@@ -297,5 +334,25 @@ mod tests {
         assert_eq!(opacity_from_menu_id("opacity_"), None);
         assert_eq!(opacity_from_menu_id("cpu"), None);
         assert_eq!(opacity_from_menu_id(""), None);
+    }
+
+    #[test]
+    pub(super) fn parses_scale_menu_ids() {
+        assert_eq!(scale_from_menu_id("scale_50"), Some(50));
+        assert_eq!(scale_from_menu_id("scale_100"), Some(100));
+        assert_eq!(scale_from_menu_id("scale_175"), Some(175));
+        // Out-of-range, malformed and unrelated ids are ignored.
+        assert_eq!(
+            scale_from_menu_id(&format!("scale_{}", MIN_SCALE_PERCENT - 1)),
+            None
+        );
+        assert_eq!(
+            scale_from_menu_id(&format!("scale_{}", MAX_SCALE_PERCENT + 1)),
+            None
+        );
+        assert_eq!(scale_from_menu_id("scale_"), None);
+        assert_eq!(scale_from_menu_id("scale_150x"), None);
+        assert_eq!(scale_from_menu_id("opacity_72"), None);
+        assert_eq!(scale_from_menu_id(""), None);
     }
 }

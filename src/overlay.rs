@@ -256,7 +256,7 @@ impl Overlay {
             crate::diag::log("foreground event hook ready");
         }
         self.ensure_topmost();
-        self.scale = self.query_scale();
+        self.scale = self.effective_scale();
         self.tray = Tray::new(self.build_menu());
         crate::diag::log(&format!(
             "tray menu: {}",
@@ -268,6 +268,9 @@ impl Overlay {
         ));
         self.install_menu_handler();
         self.refresh();
+        // A saved position can be off screen after the panel grew or the
+        // monitors changed since it was written.
+        self.keep_on_screen();
     }
 
     pub fn run(&mut self) -> i32 {

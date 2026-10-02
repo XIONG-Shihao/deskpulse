@@ -37,6 +37,14 @@ pub enum Align {
 /// Default panel alpha, unchanged since the first release.
 const DEFAULT_OPACITY: f32 = 0.72;
 
+/// Bounds for the UI scale setting. The menu offers six steps inside this
+/// range; the field itself accepts any value, like `opacity` does.
+pub const MIN_SCALE_PERCENT: u32 = 25;
+pub const MAX_SCALE_PERCENT: u32 = 400;
+
+/// Default UI scale: 100 % means "follow Windows' display scaling".
+const DEFAULT_SCALE_PERCENT: u32 = 100;
+
 /// User settings persisted to `%APPDATA%\deskpulse\config.toml`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -52,6 +60,9 @@ pub struct Config {
     pub refresh_secs: u64,
     /// Background alpha, 0.0 (invisible) ..= 1.0 (opaque).
     pub opacity: f32,
+    /// UI scale in percent, on top of the monitor's display scaling; `100`
+    /// follows Windows exactly.
+    pub scale_percent: u32,
     pub autostart: bool,
     /// Port of LibreHardwareMonitor's HTTP server (used for CPU temperature).
     pub lhm_port: u16,
@@ -70,6 +81,7 @@ impl Default for Config {
             position: None,
             refresh_secs: 1,
             opacity: DEFAULT_OPACITY,
+            scale_percent: DEFAULT_SCALE_PERCENT,
             autostart: false,
             lhm_port: 8085,
             language: None,
@@ -91,7 +103,7 @@ impl Config {
     }
 
     pub fn load() -> Self {
-        let (mut config, migrated) = match Self::read(Self::path()) {
+        let (mut config, mut save_needed) = match Self::read(Self::path()) {
             Some(config) => (config, false),
             // First run under the new name: adopt the pre-rename config.
             None => match Self::read(Self::legacy_path()) {
@@ -104,7 +116,13 @@ impl Config {
             config.language = Some(Language::system_default());
         }
 
-        if migrated {
+        let scale = clamp_scale_percent(config.scale_percent);
+        if scale != config.scale_percent {
+            config.scale_percent = scale;
+            save_needed = true;
+        }
+
+        if save_needed {
             config.save();
         }
         config
@@ -129,10 +147,15 @@ impl Config {
     }
 }
 
+/// Clamps a scale percentage into the supported range, so a hand-edited file
+/// cannot produce an unusable panel.
+pub fn clamp_scale_percent(percent: u32) -> u32 {
+    percent.clamp(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn round_trips_all_fields() {
         let mut visible = BTreeMap::new();
@@ -144,6 +167,7 @@ mod tests {
             position: Some([12.0, 34.0]),
             refresh_secs: 2,
             opacity: 0.5,
+            scale_percent: 150,
             autostart: true,
             lhm_port: 8085,
             language: Some(Language::En),
@@ -155,6 +179,7 @@ mod tests {
         assert_eq!(back.align, Align::Center);
         assert_eq!(back.position, Some([12.0, 34.0]));
         assert_eq!(back.refresh_secs, 2);
+        assert_eq!(back.scale_percent, 150);
         assert!(back.autostart);
         assert_eq!(back.language, Some(Language::En));
         assert_eq!(back.visible, visible);
@@ -167,6 +192,7 @@ mod tests {
         assert_eq!(back.align, Align::Left);
         assert_eq!(back.refresh_secs, 1);
         assert_eq!(back.opacity, DEFAULT_OPACITY);
+        assert_eq!(back.scale_percent, DEFAULT_SCALE_PERCENT);
         assert!(back.position.is_none());
         assert!(back.language.is_none());
         assert!(back.visible.is_empty());
@@ -178,5 +204,15 @@ mod tests {
         let back: Config = toml::from_str("[visible]\nnot_a_metric = true\ncpu = false\n").unwrap();
         assert_eq!(back.visible.get("cpu"), Some(&false));
         assert_eq!(back.visible.get("not_a_metric"), Some(&true));
+    }
+
+    /// A hand-edited scale outside the supported range is clamped, so the panel
+    /// can never be laid out at an unusable size.
+    #[test]
+    fn scale_percent_is_clamped() {
+        assert_eq!(clamp_scale_percent(100), 100);
+        assert_eq!(clamp_scale_percent(175), 175);
+        assert_eq!(clamp_scale_percent(0), MIN_SCALE_PERCENT);
+        assert_eq!(clamp_scale_percent(9_999), MAX_SCALE_PERCENT);
     }
 }
