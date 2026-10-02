@@ -134,12 +134,9 @@ Details about CPU temperature (why a kernel driver is required, the PawnIO proto
 
 ## Known limitations
 
-- **Reading CPU temperature directly requires administrator rights** (a PawnIO device restriction); without elevation it falls back to LHM over HTTP.
-- **Exclusive fullscreen cannot be overlaid, and not every "full screen" is the same.** The panel is a per-pixel-alpha layered window, so it exists only where DWM composites. A real exclusive fullscreen — the one Windows flags as `QUNS_RUNNING_D3D_FULL_SCREEN` — takes the display away from the desktop and stops DWM compositing that screen, and then **no non-injected window** can be drawn there: Task Manager with "always on top" is not visible either, and neither is the Windows volume bar. Every tool that does show numbers over it (RTSS / MSI Afterburner, Steam, Discord, the WeGame overlay) injects a DLL into the game, hooks its Present and draws inside the game's own frame; deskpulse does not inject (anti-cheat blocks it, and it risks bans).
-  - **Shows:** Black Myth: Wukong (UE5 / DX12), Apex (`r5apex_dx12.exe`, DX12). A DX12 "full screen" is still a DWM-composited borderless window, so the panel stays visible.
-  - **Does not show:** League of Legends (old D3D9 true-exclusive path), VALORANT (configured for exclusive fullscreen). In those fullscreen modes the panel really is not on screen; borderless or windowed puts it back.
-- GPU usage and temperature depend on the NVIDIA driver (NVML); a non-NVIDIA GPU shows `--` for those two. Video memory is read from the GPU performance counters, which exist for any adapter.
-- Unknown metrics always show `--`; `0` is never substituted for an unknown value.
+- **A game in true exclusive fullscreen cannot be overlaid.** Switch that game to its borderless or windowed mode; the mechanism, the games tested and why injection is not an option are in [FUNCTIONALITIES.md](FUNCTIONALITIES.md#8-requirements-and-limits).
+- **Reading CPU temperature directly needs administrator rights** (a PawnIO device restriction); without elevation it falls back to LibreHardwareMonitor, or shows `--`.
+- **GPU usage and GPU temperature need an NVIDIA card** (NVML). Every other metric, VRAM included, works on any adapter, and an unknown value always shows `--` rather than `0`.
 
 ## License
 
