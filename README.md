@@ -8,13 +8,11 @@ A pure-Rust Windows desktop overlay that runs entirely on the CPU and shows live
 - CPU usage + CPU temperature
 - Memory usage
 - GPU usage + GPU temperature (NVIDIA, via NVML)
-- VRAM (dedicated **plus** what the GPU borrows from system RAM, so it can exceed 100 %)
+- VRAM
 
-Extras: three layouts (vertical / horizontal / two-column), two spacing presets, left/center/right alignment, six opacity steps, a scale setting on top of the display scaling, a "keep on screen" lock, selectable metrics, values that turn red above their thresholds, Chinese/English, system tray, launch at logon, persistent configuration.
+Tech stack: pure Rust, drawn on a native Win32 layered window with GDI.
 
-Tech stack: pure Rust, drawn on a native Win32 layered window with GDI. **No GPU API** (no OpenGL / Direct3D / Vulkan) and no C++ runtime, shipped as a single-file exe.
-
-> Tech stack, architecture and trade-offs: [ARCHITECTURE.md](ARCHITECTURE.md).
+> Detailed features: [FUNCTIONALITIES.md](FUNCTIONALITIES.md) · tech stack, architecture and trade-offs: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Interface
 
@@ -36,13 +34,6 @@ Everything is configured from the right-click menu (the tray icon opens the same
 | **Show / Hide** | hide the panel without quitting |
 | **Quit** | exit |
 
-Worth knowing:
-
-- **The width is fixed by the metric set, not by the data.** The value column reserves the widest string each visible metric can render (`999.9 MB/s`, `100%`, `100°C`), so the panel never grows or twitches as the numbers change; hiding a metric is the only thing that narrows it.
-- **A value turns red** above its threshold: temperature over 80 °C, memory over 80 %, video memory over 100 %. Names stay muted so the values keep the visual lead.
-- **Speed format**: at most three integer digits and one decimal (`999.9 KB/s`); below one unit, two decimals (`0.98 KB/s`); roll-over to the next unit rather than a fourth digit (`1023.9 KB/s` → `1.00 MB/s`).
-- **Two settings have no menu entry** and live only in `%APPDATA%\deskpulse\config.toml`: `refresh_secs` (sampling interval, default 1 s) and `lhm_port` (LibreHardwareMonitor's HTTP port, used only when the PawnIO driver is unavailable). The file can be edited by hand; the menu writes it back on every change. Its `visible` table is keyed by metric: `net_up`, `net_down`, `cpu`, `cpu_temp`, `mem`, `gpu`, `vram`, `gpu_temp`.
-
 ### Opacity
 
 Only the panel background is translucent; the text is always drawn fully opaque, so the numbers stay readable at every step. Here at 30 %, 45 %, 72 % (the default) and 100 %:
@@ -50,10 +41,6 @@ Only the panel background is translucent; the text is always drawn fully opaque,
 | 30 % | 45 % | 72 % (default) | 100 % |
 | --- | --- | --- | --- |
 | ![30 % opacity](docs/opacity-30.png) | ![45 % opacity](docs/opacity-45.png) | ![72 % opacity](docs/opacity-72.png) | ![100 % opacity](docs/opacity-100.png) |
-
-### Scale
-
-The panel is laid out in physical pixels at `monitor DPI / 96 × scale_percent / 100`, so `100 %` follows Windows' display scaling exactly and the other steps multiply it: on a 150 % desktop, `150 %` means 1.5 × 1.5 = 2.25× the fonts of a 100 % desktop, and `50 %` means three quarters of it. Every part of the panel scales together — fonts, row height, margins, corner radius and the reserved column widths.
 
 ## Build and run
 
@@ -81,30 +68,12 @@ Measured on the development machine, with the desktop otherwise idle:
 | Working set | ≈ 43 MB |
 | `deskpulse.exe` | **1.05 MB** |
 
-Six metrics shown, one sample per second, Windows 11 at 150 % display scaling. That is roughly **3 ms of CPU time per second** — effectively invisible in Task Manager, and far below a single frame of a typical animated UI.
-
-Why it is this cheap:
-
-- **Nothing renders unless the data changes.** The sampler thread posts a message after each new snapshot (once per second by default); the window redraws only then. There is no continuous render loop and no animation.
-- **The whole panel is one small bitmap.** The background and the text are composited into a ~160×180 px 32-bit DIB in ordinary memory and handed to Windows with a single `UpdateLayeredWindow` call.
-- **No GPU API at all.** The UI never touches OpenGL / Direct3D / Vulkan, so it also works on machines with only the Microsoft Basic Display adapter, inside virtual machines and over Remote Desktop.
-
-For comparison, the earlier `egui` / `wgpu` builds of the same overlay used ≈ 125 MB (OpenGL backend) and ≈ 420 MB (WARP backend) of working set, and an order of magnitude more CPU.
 ## Packaging a standalone exe
-
-`cargo build --release` produces `target\release\deskpulse.exe`, a single distributable file:
-
-- **App icon and version info** embedded by `build.rs` + `winresource` from `assets/icon.ico`.
-- **No VC++ runtime dependency**: `.cargo\config.toml` enables `+crt-static` for `x86_64-pc-windows-msvc`.
-- **Size optimised**: release uses `lto`, `codegen-units = 1`, `strip`, `panic = "abort"`.
-- **No console window**: release builds use `windows_subsystem = "windows"`.
 
 ```powershell
 cargo build --release
 Copy-Item .\target\release\deskpulse.exe .\dist\deskpulse.exe
 ```
-
-`dist\deskpulse.exe` runs on double-click or can be copied elsewhere. To regenerate the icon: `pwsh -File .\assets\make-icon.ps1`.
 
 ## File structure
 
@@ -149,6 +118,7 @@ deskpulse/
         ├── pawnio.rs        # CPU temperature straight from the PawnIO driver
         └── temp.rs          # temperature: PawnIO first, LHM HTTP fallback
 ```
+
 ## Metrics and data sources
 
 | Metric | Source | Measured locally |

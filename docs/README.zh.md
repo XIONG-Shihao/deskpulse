@@ -8,13 +8,11 @@
 - CPU 占用率 + CPU 温度
 - 内存占用率
 - 显卡占用率 + GPU 温度（NVIDIA，走 NVML）
-- 显存（专用 **加上** 从内存借用的部分，因此可能超过 100 %）
+- 显存
 
-附加功能：三种排列（竖排 / 横排 / 竖两排）、两种间距、左/居中/右对齐、六档透明度、在系统缩放之上再叠加的缩放百分比、把面板锁在显示器内的开关、可选显示项、超过阈值的数值变红、中英文、系统托盘、开机自启、配置持久化。
+技术栈：纯 Rust，用原生 Win32 分层窗口 + GDI 绘制。
 
-技术栈：纯 Rust，用原生 Win32 分层窗口 + GDI 绘制。**不依赖任何 GPU API**（OpenGL / Direct3D / Vulkan 都不用），也不依赖 C++ 运行时，单文件 exe。
-
-> 技术栈、架构与设计取舍见 [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)。
+> 详细功能见 [FUNCTIONALITIES.zh.md](FUNCTIONALITIES.zh.md) · 技术栈、架构与设计取舍见 [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)。
 
 ## 界面
 
@@ -36,13 +34,6 @@
 | **显示 / 隐藏** | 暂时隐藏面板，不退出 |
 | **退出** | 退出程序 |
 
-还有几点值得知道：
-
-- **宽度由指标集合决定，不由数据决定。** 数值列按每个可见指标**可能出现的最宽值**预留（`999.9 MB/s`、`100%`、`100°C`），所以数值变化时面板既不增长也不抖动；只有隐藏指标才会让它变窄。
-- **数值越过阈值变红**：温度 > 80 °C、内存 > 80 %、显存 > 100 %。名称列保持灰色，让数值继续承担视觉主位。
-- **速率格式**：整数部分最多 3 位、小数 1 位（`999.9 KB/s`）；不足一个单位时 2 位小数（`0.98 KB/s`）；需要 4 位整数时进位到下一单位（`1023.9 KB/s` → `1.00 MB/s`）。
-- **有两项设置没有菜单入口**，只存在于 `%APPDATA%\deskpulse\config.toml`：`refresh_secs`（采集间隔，默认 1 秒）和 `lhm_port`（LibreHardwareMonitor 的 HTTP 端口，仅在 PawnIO 驱动不可用时使用）。这个文件可以手工编辑，菜单每次改动都会重写它；其中的 `visible` 表以指标名为键：`net_up`、`net_down`、`cpu`、`cpu_temp`、`mem`、`gpu`、`vram`、`gpu_temp`。
-
 ### 透明度
 
 只有面板背景是半透明的，文字始终以完全不透明绘制，因此每一档都清晰可读。下面依次是 30 %、45 %、72 %（默认）和 100 %：
@@ -50,10 +41,6 @@
 | 30 % | 45 % | 72 %（默认） | 100 % |
 | --- | --- | --- | --- |
 | ![30 % 透明度](opacity-30.png) | ![45 % 透明度](opacity-45.png) | ![72 % 透明度](opacity-72.png) | ![100 % 透明度](opacity-100.png) |
-
-### 缩放
-
-面板按物理像素排布，比例是 `显示器 DPI / 96 × scale_percent / 100`。因此 `100 %` 就是完全跟随 Windows 的缩放比例，其余档位在此基础上相乘：在 150 % 的桌面上选 `150 %`，等于 100 % 桌面的 1.5 × 1.5 = 2.25 倍，选 `50 %` 则是它的四分之三。面板的所有部分一起缩放——字体、行高、边距、圆角半径，以及预留出来的列宽。
 
 ## 构建与运行
 
@@ -81,30 +68,12 @@ cargo run -- --dump
 | 工作集 | 约 43 MB |
 | `deskpulse.exe` | **1.05 MB** |
 
-显示 6 项指标、每秒采样一次、Windows 11 且显示缩放 150%。换算过来大约**每秒 3 毫秒 CPU 时间**——在任务管理器里基本看不到，远低于一个常见动画界面渲染一帧的开销。
-
-之所以这么低：
-
-- **数据不变就不重绘**：采集线程每采到一份新快照才发消息唤醒窗口（默认每秒一次），窗口只在此时重绘。没有持续渲染循环，也没有动画。
-- **整个面板就是一张小位图**：背景和文字都合成到内存里约 160×180 像素的 32 位 DIB 上，再用一次 `UpdateLayeredWindow` 交给系统。
-- **完全不用 GPU API**：界面不碰 OpenGL / Direct3D / Vulkan，因此只有 Microsoft 基本显示适配器的机器、虚拟机和远程桌面也能正常跑。
-
-对比：同一悬浮窗此前的 `egui` / `wgpu` 构建工作集约 **125 MB**（OpenGL 后端）和 **420 MB**（WARP 后端），CPU 也高一个数量级。
 ## 打包成独立 exe
-
-`cargo build --release` 产出的 `target\release\deskpulse.exe` 即为可分发的单文件程序：
-
-- **带应用图标与版本信息**：由 `build.rs` + `winresource` 嵌入 `assets/icon.ico`。
-- **不依赖 VC++ 运行时**：`.cargo\config.toml` 对 `x86_64-pc-windows-msvc` 开启 `+crt-static`。
-- **体积优化**：release 开启 `lto`、`codegen-units = 1`、`strip`、`panic = "abort"`。
-- **无控制台窗口**：release 构建带 `windows_subsystem = "windows"`。
 
 ```powershell
 cargo build --release
 Copy-Item .\target\release\deskpulse.exe .\dist\deskpulse.exe
 ```
-
-`dist\deskpulse.exe` 可直接双击运行或拷给别人。重新生成图标：`pwsh -File .\assets\make-icon.ps1`。
 
 ## 文件结构
 
@@ -149,6 +118,7 @@ deskpulse/
         ├── pawnio.rs        # PawnIO 内核驱动直读 CPU 温度
         └── temp.rs          # 温度：PawnIO 优先，LHM HTTP 退路
 ```
+
 ## 指标与数据来源
 
 | 指标 | 数据来源 | 本机实测 |
