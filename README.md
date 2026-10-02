@@ -7,13 +7,46 @@ A pure-Rust Windows desktop overlay that runs entirely on the CPU and shows live
 - Upload / download speed
 - CPU usage + CPU temperature
 - Memory usage
-- GPU usage, VRAM and GPU temperature (NVIDIA)
+- GPU usage + GPU temperature (NVIDIA, via NVML)
+- VRAM (dedicated **plus** what the GPU borrows from system RAM, so it can exceed 100 %)
 
-Extras: three layouts (vertical / horizontal / two-column), two spacing presets, left/center/right text alignment, selectable metrics, Chinese/English, system tray, launch at logon, persistent configuration.
+Extras: three layouts (vertical / horizontal / two-column), two spacing presets, left/center/right alignment, six opacity steps, a scale setting on top of the display scaling, a "keep on screen" lock, selectable metrics, values that turn red above their thresholds, Chinese/English, system tray, launch at logon, persistent configuration.
 
 Tech stack: pure Rust, drawn on a native Win32 layered window with GDI. **No GPU API** (no OpenGL / Direct3D / Vulkan) and no C++ runtime, shipped as a single-file exe.
 
 > Tech stack, architecture and trade-offs: [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Interface
+
+Everything is configured from the right-click menu (the tray icon opens the same menu, built by the same code):
+
+![Settings menu](docs/menu.png)
+
+| Entry | What it does |
+| --- | --- |
+| **Show** ▸ | tick the metrics to display; a hidden metric takes no space, the panel shrinks |
+| **Layout** ▸ | vertical / horizontal / two-column |
+| **Spacing** ▸ | tight / loose gap between rows |
+| **Align** ▸ | left / center / right for the name and the value inside each cell |
+| **Opacity** ▸ | 30 / 45 / 60 / 72 / 85 / 100 % background alpha |
+| **Scale** ▸ | 50 / 75 / 100 / 125 / 150 / 175 %, **on top of** the monitor's display scaling |
+| **Language** ▸ | 中文 / English |
+| **Keep on screen** | the panel cannot be dragged out of its monitor, and is pulled back in when it grows or the monitors change |
+| **Start with Windows** | a logon scheduled task, so the CPU temperature keeps working without a UAC prompt |
+| **Show / Hide** | hide the panel without quitting |
+| **Quit** | exit |
+
+### Opacity
+
+Only the panel background is translucent; the text is always drawn fully opaque, so the numbers stay readable at every step. Here at 30 %, 45 %, 72 % (the default) and 100 %:
+
+| 30 % | 45 % | 72 % (default) | 100 % |
+| --- | --- | --- | --- |
+| ![30 % opacity](docs/opacity-30.png) | ![45 % opacity](docs/opacity-45.png) | ![72 % opacity](docs/opacity-72.png) | ![100 % opacity](docs/opacity-100.png) |
+
+### Scale
+
+The panel is laid out in physical pixels at `monitor DPI / 96 × scale_percent / 100`, so `100 %` follows Windows' display scaling exactly and the other steps multiply it: on a 150 % desktop, `150 %` means 1.5 × 1.5 = 2.25× the fonts of a 100 % desktop, and `50 %` means three quarters of it. Every part of the panel scales together — fonts, row height, margins, corner radius and the reserved column widths.
 
 ## Build and run
 
@@ -21,7 +54,7 @@ Tech stack: pure Rust, drawn on a native Win32 layered window with GDI. **No GPU
 cargo run --release
 ```
 
-A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu: Show/Hide, a metric picker, Layout, Spacing, Align, Opacity, Language, Start with Windows and Quit (the metric picker and the five settings groups are submenus). The tray icon opens the very same menu, built by the same code.
+A floating window appears on the desktop; drag it with the mouse. **Right-click** opens the settings menu (see [Interface](#interface)): which metrics to show, layout, spacing, alignment, opacity, scale, language, keep-on-screen and launch-at-logon switches, show/hide and quit.
 
 ## Performance
 
@@ -41,7 +74,7 @@ Measured on the development machine, with the desktop otherwise idle:
 | Working set | ≈ 43 MB |
 | Threads | 4–7 |
 | Handles | ≈ 290 |
-| `deskpulse.exe` | **0.97 MB** |
+| `deskpulse.exe` | **1.05 MB** |
 
 That is roughly **3 ms of CPU time per second** — effectively invisible in Task Manager, and far below a single frame of a typical animated UI.
 
@@ -103,6 +136,7 @@ deskpulse/
 │   ├── make-icon.ps1        # icon generator
 │   ├── AMDFamily17.bin      # PawnIO module (AMD SMN)
 │   └── IntelMSR.bin         # PawnIO module (Intel MSR)
+├── docs/                    # screenshots used by the READMEs
 └── src/
     ├── main.rs              # entry, --dump diagnostic, self-elevation
     ├── overlay.rs           # module root: window lifecycle, message loop, drag

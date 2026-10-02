@@ -62,7 +62,7 @@ muda / 托盘事件线程（由 tray-icon 持有）
 | 模块 | 职责 |
 | --- | --- |
 | `main.rs` | 解析 `--dump`；自提权；声明 DPI 感知；持有 `Overlay` 实例并跑消息循环 |
-| `overlay.rs` + `overlay/` | 整个界面，按职责拆分：窗口生命周期与消息循环（`overlay.rs`）、原生 Win32 FFI（`win32.rs`）、指标（`metric.rs`）、GDI 画布（`canvas.rs`）、布局（`layout.rs`）、绘制（`paint.rs`）、菜单（`menu.rs`）、置顶（`topmost.rs`）、DPI（`dpi.rs`） |
+| `overlay.rs` + `overlay/` | 整个界面，按职责拆分：窗口生命周期与消息循环（`overlay.rs`）、原生 Win32 FFI（`win32.rs`）、指标（`metric.rs`）、GDI 画布（`canvas.rs`）、布局（`layout.rs`）、绘制（`paint.rs`）、菜单（`menu.rs`）、置顶（`topmost.rs`）、DPI 与缩放（`dpi.rs`） |
 | `wide.rs` | 供各 Win32 调用方共用的「补 NUL 的 UTF-16」辅助函数 |
 | `single_instance.rs` | 命名互斥体：每个登录会话只运行一个悬浮窗 |
 | `config.rs` | `Config`/`Layout`/`Spacing`/`Align` 读写、缺省值、旧目录迁移 |
