@@ -58,6 +58,7 @@ For comparison, the earlier `egui` / `wgpu` builds of the same overlay used ≈ 
 - **Fixed width sized to the worst case**: the name column is sized from the labels and the value column from the widest value each visible metric can render (`999.9 MB/s`, `100%`, `100°C`), both measured with `GetTextExtentPoint32W`. The width is decided once by the metric set, so the panel never grows or twitches as the data changes, and it is never wider than the worst case it can display.
 - **DPI aware**: the process declares per-monitor-v2 DPI awareness. The panel and fonts are laid out at the monitor's native pixel grid, and everything re-scales when the window is dragged to a monitor with a different scaling factor.
 - **Scalable**: fonts, row height, margins and the corner radius all come from one layout scale — the monitor's display scaling multiplied by `scale_percent` (`100` = follow Windows). If the panel would leave its monitor after a change, it is pulled back inside.
+- **Stays on screen**: unless the setting is turned off, the whole panel is kept inside the monitor it is on — while dragging, after it grows, when the window crosses to another monitor, and at startup (a saved position can be stale by then). The panel is only ever moved, never resized, and a panel bigger than the monitor is pinned to its top-left corner.
 - **Point-based gap**: the name↔value gap is a physical 2 pt (rounded up to a whole pixel), so it keeps the same physical size at any resolution and display scaling.
 - **Text alignment**: left / center / right, applied to each metric's name and value inside its cell.
 - **Three layouts**: vertical (one item per row), horizontal (all items in one row), two-column (two items per row; default order Up/Down, CPU/CPU T, Mem/GPU, VRAM/GPU T).
@@ -143,6 +144,7 @@ Path: `%APPDATA%\deskpulse\config.toml`.
 | `spacing` | `tight` (default) or `loose` — the vertical gap between rows |
 | `align` | `left` (default), `center` or `right` — text alignment inside each cell |
 | `position` | Top-left window position; saved after dragging |
+| `keep_on_screen` | Whether the panel is kept inside its monitor. On by default: dragging cannot pull it out, and it is pulled back after it grows or the monitors change. Turn it off to park it partly off screen. |
 | `refresh_secs` | Sampling interval in seconds |
 | `opacity` | Panel alpha, 0.0–1.0; default `0.72` (translucent). The menu offers six steps; the field still accepts any value. Text stays opaque. |
 | `scale_percent` | UI scale in percent. `100` (default) follows the monitor's display scaling; the value multiplies it, so `150` on a 150 % desktop is 1.5 × 1.5. The menu offers 50/75/100/125/150/175; the field accepts 25–400. |

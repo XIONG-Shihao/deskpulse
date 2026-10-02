@@ -122,7 +122,7 @@ Windows 没有可靠的公开 CPU 温度 API。核心温度只能读 **MSR**（I
 
 ## 6. 窗口、DPI 与布局
 
-- **先声明 DPI 感知**：在任何窗口创建之前，`main.rs` 调用 `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`（失败回退 `SetProcessDPIAware`）。不做这一步 Windows 会把窗口位图整体拉伸，文字就会糊。之后 `GetDpiForWindow` 才能拿到真实 DPI（150% 时为 `144`），并由 `WM_DPICHANGED` 在窗口跨到不同显示器时重新缩放、移动到系统建议的矩形并重建字体与位图。用户的缩放设置（`scale_percent`，`100` 即「完全跟随 Windows」）再乘在这个 DPI 系数上；任何一次尺寸变化之后，面板都会被拉回所属显示器范围内。
+- **先声明 DPI 感知**：在任何窗口创建之前，`main.rs` 调用 `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`（失败回退 `SetProcessDPIAware`）。不做这一步 Windows 会把窗口位图整体拉伸，文字就会糊。之后 `GetDpiForWindow` 才能拿到真实 DPI（150% 时为 `144`），并由 `WM_DPICHANGED` 在窗口跨到不同显示器时重新缩放、移动到系统建议的矩形并重建字体与位图。用户的缩放设置（`scale_percent`，`100` 即「完全跟随 Windows」）再乘在这个 DPI 系数上。只要 `keep_on_screen` 没被关掉，整个面板都会留在所属显示器内：缩放变化后、`WM_DPICHANGED` 之后、启动时、以及拖动过程中。`clamp_to_area` 作用在窗口矩形上，因此只会移动、从不改变尺寸；比显示器还大时贴左上角。
 - **宽度由指标集合决定**：所有几何都由 `scale = dpi / 96 × scale_percent / 100` 推导。名称列取可见标签中最宽的，数值列取每个可见指标**可能出现的最宽值**，都用临时 DC 的 `GetTextExtentPoint32W` 量出来；面板宽度为 `边距 + 名称列 + 间距 + 数值列 + 边距`。因为预留的是格式上限（`999.9 MB/s`、`100%`、`100°C`）而不是实时数据，宽度**恒定**：只有显示/隐藏指标或切换语言时才会变，数值变化不会改变它。
 - **按「点」定义的间距**：名称↔数值间距定义在印刷点（`PT = 96/72` 逻辑单位），并**向上取整**到整像素，所以在任何分辨率与缩放下都是物理 2pt。
 - **全整数几何**：所有矩形和面板尺寸都用整数像素，保证文字矩形与面板尺寸一致（不会出现 1px 裁切），行也落在像素网格上，GDI 文字更锐利。

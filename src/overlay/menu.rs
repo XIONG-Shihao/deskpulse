@@ -144,6 +144,13 @@ impl Overlay {
         let _ = menu.append(&language);
 
         let _ = menu.append(&CheckMenuItem::with_id(
+            "keep_on_screen",
+            t.keep_on_screen,
+            true,
+            self.config.keep_on_screen,
+            None,
+        ));
+        let _ = menu.append(&CheckMenuItem::with_id(
             "autostart",
             t.autostart,
             true,
@@ -192,6 +199,12 @@ impl Overlay {
                 "align_right" => self.set_align(Align::Right),
                 "lang_zh" => self.set_language(Language::Zh),
                 "lang_en" => self.set_language(Language::En),
+                "keep_on_screen" => {
+                    self.config.keep_on_screen = !self.config.keep_on_screen;
+                    self.config.save();
+                    // Switching it on pulls the panel back right away.
+                    self.keep_on_screen();
+                }
                 "autostart" => {
                     let enabled = !self.config.autostart;
                     self.set_autostart(enabled);

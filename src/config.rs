@@ -63,6 +63,9 @@ pub struct Config {
     /// UI scale in percent, on top of the monitor's display scaling; `100`
     /// follows Windows exactly.
     pub scale_percent: u32,
+    /// Whether the panel is kept inside its monitor: dragging cannot pull it
+    /// out, and it is pulled back after it grows or the monitors change.
+    pub keep_on_screen: bool,
     pub autostart: bool,
     /// Port of LibreHardwareMonitor's HTTP server (used for CPU temperature).
     pub lhm_port: u16,
@@ -82,6 +85,7 @@ impl Default for Config {
             refresh_secs: 1,
             opacity: DEFAULT_OPACITY,
             scale_percent: DEFAULT_SCALE_PERCENT,
+            keep_on_screen: true,
             autostart: false,
             lhm_port: 8085,
             language: None,
@@ -168,6 +172,7 @@ mod tests {
             refresh_secs: 2,
             opacity: 0.5,
             scale_percent: 150,
+            keep_on_screen: false,
             autostart: true,
             lhm_port: 8085,
             language: Some(Language::En),
@@ -180,6 +185,7 @@ mod tests {
         assert_eq!(back.position, Some([12.0, 34.0]));
         assert_eq!(back.refresh_secs, 2);
         assert_eq!(back.scale_percent, 150);
+        assert!(!back.keep_on_screen);
         assert!(back.autostart);
         assert_eq!(back.language, Some(Language::En));
         assert_eq!(back.visible, visible);
@@ -193,6 +199,7 @@ mod tests {
         assert_eq!(back.refresh_secs, 1);
         assert_eq!(back.opacity, DEFAULT_OPACITY);
         assert_eq!(back.scale_percent, DEFAULT_SCALE_PERCENT);
+        assert!(back.keep_on_screen);
         assert!(back.position.is_none());
         assert!(back.language.is_none());
         assert!(back.visible.is_empty());

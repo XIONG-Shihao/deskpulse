@@ -39,6 +39,7 @@ impl Language {
                 gpu_temp: "GPU温",
                 metrics: "显示数据",
                 scale: "缩放",
+                keep_on_screen: "保持在屏内",
                 layout: "布局",
                 vertical: "竖排",
                 horizontal: "横排",
@@ -67,6 +68,7 @@ impl Language {
                 gpu_temp: "GPU T",
                 metrics: "Show",
                 scale: "Scale",
+                keep_on_screen: "Keep on screen",
                 layout: "Layout",
                 vertical: "Vertical",
                 horizontal: "Horizontal",
@@ -101,6 +103,8 @@ pub struct Text {
     pub metrics: &'static str,
     /// Submenu that scales the whole panel up or down.
     pub scale: &'static str,
+    /// Check item that keeps the panel inside its monitor.
+    pub keep_on_screen: &'static str,
     pub layout: &'static str,
     pub vertical: &'static str,
     pub horizontal: &'static str,

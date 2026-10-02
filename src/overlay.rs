@@ -102,6 +102,15 @@ const VALUE_SIZE: f32 = 14.0;
 static INSTANCE: AtomicPtr<Overlay> = AtomicPtr::new(std::ptr::null_mut());
 static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
 
+/// An in-progress drag: where the cursor and the window were when it started,
+/// plus the panel size, which the on-screen clamp needs.
+#[derive(Clone, Copy)]
+struct Drag {
+    cursor: Point,
+    window: Point,
+    size: (i32, i32),
+}
+
 pub struct Overlay {
     hwnd: isize,
     foreground_hook: isize,
@@ -118,7 +127,7 @@ pub struct Overlay {
     size: (i32, i32),
     scale: f32,
     visible: bool,
-    dragging: Option<(i32, i32, i32, i32)>,
+    dragging: Option<Drag>,
     /// Whether the last foreground-change check found us covered.
     topmost_covered: bool,
 }
@@ -412,13 +421,20 @@ impl Overlay {
             if GetCursorPos(&mut cursor) == 0 || GetWindowRect(self.hwnd, &mut rect) == 0 {
                 return;
             }
-            self.dragging = Some((cursor.x, cursor.y, rect.left, rect.top));
+            self.dragging = Some(Drag {
+                cursor,
+                window: Point {
+                    x: rect.left,
+                    y: rect.top,
+                },
+                size: (rect.right - rect.left, rect.bottom - rect.top),
+            });
             SetCapture(self.hwnd);
         }
     }
 
     fn update_drag(&mut self) {
-        let Some((start_x, start_y, win_x, win_y)) = self.dragging else {
+        let Some(drag) = self.dragging else {
             return;
         };
         // SAFETY: moving our own window.
@@ -427,8 +443,15 @@ impl Overlay {
             if GetCursorPos(&mut cursor) == 0 {
                 return;
             }
-            let x = win_x + (cursor.x - start_x);
-            let y = win_y + (cursor.y - start_y);
+            let x = drag.window.x + (cursor.x - drag.cursor.x);
+            let y = drag.window.y + (cursor.y - drag.cursor.y);
+            // The whole panel stays on screen while it is dragged, unless the
+            // user turned that off.
+            let (x, y) = if self.config.keep_on_screen {
+                self.clamped_position(x, y, drag.size.0, drag.size.1)
+            } else {
+                (x, y)
+            };
             SetWindowPos(
                 self.hwnd,
                 0,
